@@ -28,8 +28,9 @@ import einops
 
 BasePolicy: TypeAlias = _base_policy.BasePolicy
 
-TEST, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION = range(9)
-stage = ACTION
+TEST, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION, ACTION_B= range(10)
+
+stage = SKIP
 
 use_raw = stage not in [OBS,PALIGEMMA_FULL,ACTION]
 UINT8, FP16, FP32 = range(3)
@@ -56,18 +57,30 @@ class Policy(BasePolicy):
         output_transforms: Sequence[_transforms.DataTransformFn] = (),
         sample_kwargs: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
+        pytorch_device: str = "cpu",
+        is_pytorch: bool = False
     ):
-        self._sample_actions = nnx_utils.module_jit(model.sample_actions)
+        self._model = model
         self._input_transform = _transforms.compose(transforms)
         self._output_transform = _transforms.compose(output_transforms)
         self._rng = rng or jax.random.key(0)
         self._sample_kwargs = sample_kwargs or {}
         self._metadata = metadata or {}
+        self._is_pytorch_model = is_pytorch
+        self._pytorch_device = pytorch_device
+
+        if self._is_pytorch_model:
+            self._model = self._model.to(pytorch_device)
+            self._model.eval()
+            self._sample_actions = model.sample_actions
+        else:
+            # JAX model setup
+            self._sample_actions = nnx_utils.module_jit(model.sample_actions)
+            self._rng = rng or jax.random.key(0)
 
         self.listen_fd = None
         self.sock_fd = None
         self.seq = 0
-        self.linear = self.load_linear_from_safetensors("/mnt/data/yanjie.shen/RoboTwin/data/linear_extracted.safetensors")
 
         self.count = 0
 
@@ -170,16 +183,25 @@ class Policy(BasePolicy):
         state_dtypes = [msg_pb2.Tensor.FLOAT64,msg_pb2.Tensor.FLOAT32]
 
         # 添加图像Tensor
-        for img in observation["images"].values():
-            image = input_msg.images.add()
-            image.dtype = img_dtypes[use_raw]
-            if img_out_type == FP16:
+        if type(observation["images"] is dict):
+            for img in observation["images"].values():
+                image = input_msg.images.add()
+                image.dtype = img_dtypes[use_raw]
+                if img_out_type == FP16:
+                    img = img.astype(jnp.float16)
+                    img = jnp.moveaxis(img,3,1)
+                    print('shape sent:',img.shape)
+                    image.dtype = msg_pb2.Tensor.FP16
+                image.shape.extend(img.shape)
+                image.data = img.tobytes()
+        else:
+            # send kvcache
+            for img in observation["images"]:
+                image = input_msg.images.add()
                 img = img.astype(jnp.float16)
-                img = jnp.moveaxis(img,3,1)
-                print('shape sent:',img.shape)
                 image.dtype = msg_pb2.Tensor.FP16
-            image.shape.extend(img.shape)
-            image.data = img.tobytes()
+                image.shape.extend(img.shape)
+                image.data = img.tobytes()
 
         # 添加语言Tensor
         language = input_msg.languages.add()
@@ -348,18 +370,9 @@ class Policy(BasePolicy):
 
     def proc_siglip(self,recv_data):
         siglip_in = recv_data["images"]
-        siglip_out = {}
-        if stage == SIGLIP_PRJ:
-            for key, emb in siglip_in.items():
-                print(key,emb)
-                siglip_prj = self.linear(torch.from_numpy(emb).to(torch.bfloat16)).to(torch.float16).detach().cpu().numpy()
-                siglip_out[key]= siglip_prj
-        else:
-            siglip_out = siglip_in
-
         siglip_jax = jax.tree.map(
             lambda x: jnp.array(x, dtype=jnp.bfloat16),
-            siglip_out
+            siglip_in
         )
         return siglip_jax
 
@@ -382,7 +395,7 @@ class Policy(BasePolicy):
         return paligemma_jax
     
     @override
-    def infer(self, obs: dict) -> dict:  # type: ignore[misc]
+    def infer(self, obs: dict,noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
         # PATCH
         def dict_equal(d1, d2, atol=1e-6):
             if not (isinstance(d1, dict) and isinstance(d2, dict)):
@@ -436,16 +449,29 @@ class Policy(BasePolicy):
             assert dict_equal(obs,obs_old) ,"recv mismatch!"
         # PATCH END
 
-        input_at = list(obs['images'].values())
-     #   for i,img in enumerate(input_at):
-     #       np.save(f'proc/{i}_img_raw_py.npy',np.array(img))
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
         inputs = self._input_transform(inputs)
+
         # Make a batch and convert to jax.Array.
-        input_at = list(inputs['image'].values())
-   #     for i,img in enumerate(input_at):
-    #        np.save(f'proc/{i}_img_py.npy',np.array(img))
+        if not self._is_pytorch_model:
+            # Make a batch and convert to jax.Array.
+            inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
+            self._rng, sample_rng_or_pytorch_device = jax.random.split(self._rng)
+        else:
+            # Convert inputs to PyTorch tensors and move to correct device
+            inputs = jax.tree.map(lambda x: torch.from_numpy(np.array(x)).to(self._pytorch_device)[None, ...], inputs)
+            sample_rng_or_pytorch_device = self._pytorch_device
+
+        # Prepare kwargs for sample_actions
+        sample_kwargs = dict(self._sample_kwargs)
+        if noise is not None:
+            noise = torch.from_numpy(noise).to(self._pytorch_device) if self._is_pytorch_model else jnp.asarray(noise)
+
+            if noise.ndim == 2:  # If noise is (action_horizon, action_dim), add batch dimension
+                noise = noise[None, ...]  # Make it (1, action_horizon, action_dim)
+            sample_kwargs["noise"] = noise            
+
         inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
 
         self._rng, sample_rng = jax.random.split(self._rng)
@@ -460,8 +486,6 @@ class Policy(BasePolicy):
             }
             if stage == TEST:
                 test_result_bchw= np.fromfile("/mnt/data/yanjie.shen/RoboTwin/policy/pi0/test/input.bin", dtype=np.float16).reshape(1,3,224,224)
-               # test_result_bchw = np.load("/mnt/data/yanjie.shen/RoboTwin/policy/pi0/test/front_0.png.npy")
-               # test_result = jnp.moveaxis(jnp.array(test_result_bchw),1,-1)
                 test_result = jnp.transpose(jnp.array(test_result_bchw), (0, 2, 3, 1))
                 print('shape_in',test_result.shape)
                 print('vector_in',test_result)
@@ -483,14 +507,9 @@ class Policy(BasePolicy):
                 'state':obs.state,
                 'prompt':obs.tokenized_prompt
             }
-       #     print("state",obs["state"])
 
-       #     for i,img in enumerate(obs['images'].values()):
-       #         np.save(f'proc/{i}_img_py.npy',np.array(img))
-       #     np.save(f'proc/0_token_py.npy',np.array(obs['prompt']))
             print('wait receive')           
             recv_data = self.receive()
-  
 
         if stage == PREPROC:
             obs_old = obs
@@ -503,13 +522,30 @@ class Policy(BasePolicy):
         elif stage == ACTION:
             action_result = self.proc_action(recv_data)
 
+        kvcache_result, actions = self._sample_actions(sample_rng_or_pytorch_device, _model.Observation.from_dict(inputs), **self._sample_kwargs,test_obs=None, siglip_result=siglip_result,kvcache_result=kvcache_result,count=self.count)
+
+        if stage == ACTION_B:
+            obs = {
+                'images':kvcache_result, # actually kv_cache
+                'state':obs.state,
+                'prompt':obs.tokenized_prompt
+            }
+            self.send(obs)
+            recv_data = self.receive()
+            action_result = self.self.proc_action(recv_data)
+
         outputs = {
             "state": inputs["state"],
-            "actions": self._sample_actions(sample_rng, _model.Observation.from_dict(inputs), **self._sample_kwargs,test_obs=None, siglip_result=siglip_result,kvcache_result=kvcache_result,count=self.count),
+            "actions": actions,
         }
-        self.count +=3 
+        self.count +=1
+        
+        if self._is_pytorch_model:
+            outputs = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), outputs)
+        else:
+            outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
 
-        if stage == ACTION:
+        if stage == ACTION or stage == ACTION_B:
             print('raw action',outputs["actions"])
             print('cpp action',action_result)
             np.save("test/py_act.npy",np.array(outputs["actions"]))

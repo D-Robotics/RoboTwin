@@ -35,6 +35,12 @@ USE_CAUCHY_CAMERA =  False
 HD = False
 USE_VIDEO = True
 
+import os
+os.environ["TORCHDYNAMO_DISABLE"] = "1"
+#os.environ["TORCH_COMPILE_DISABLE"] = "1"
+# 可选，确保不会触发 triton 检查
+os.environ["CUDA_VISIBLE_DEVICES"] = os.environ.get("CUDA_VISIBLE_DEVICES", "")  # 防止空值异常
+
 def class_decorator(task_name):
     envs_module = importlib.import_module(f"envs.{task_name}")
     try:

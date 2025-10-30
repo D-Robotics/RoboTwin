@@ -23,9 +23,11 @@ from openpi.shared import download
 from openpi.training import config as _config
 from openpi.training import data_loader as _data_loader
 
+import os
+os.environ["TORCH_LOGS"] = "off"
+os.environ["PYTORCH_TRTON_DISABLE"] = "1"
 
 class PI0:
-
     def __init__(self, train_config_name, model_name, checkpoint_id, pi0_step):
         self.train_config_name = train_config_name
         self.model_name = model_name
@@ -34,7 +36,8 @@ class PI0:
         config = _config.get_config(self.train_config_name)
         self.policy = _policy_config.create_trained_policy(
             config,
-            f"policy/pi0/checkpoints/{self.train_config_name}/{self.model_name}/{self.checkpoint_id}",
+        #    f"policy/pi0/checkpoints/{self.train_config_name}/{self.model_name}/{self.checkpoint_id}",
+        "/mnt/data/yanjie.shen/RoboTwin/policy/pi0/torch_model/pi0_aloha_pytorch_hammer_demo_clean_1027",
             robotwin_repo_id=model_name)
         print("loading model success!")
         self.img_size = (224, 224)
