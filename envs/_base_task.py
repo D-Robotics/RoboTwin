@@ -214,7 +214,8 @@ class Base_Task(gym.Env):
         sapien.render.set_camera_shader_dir("rt")
         sapien.render.set_ray_tracing_samples_per_pixel(32)
         sapien.render.set_ray_tracing_path_depth(8)
-        sapien.render.set_ray_tracing_denoiser("oidn")
+    #    sapien.render.set_ray_tracing_denoiser("oidn")
+        sapien.render.set_ray_tracing_denoiser("none")
 
         # declare sapien scene
         scene_config = sapien.SceneConfig()
@@ -572,8 +573,11 @@ class Base_Task(gym.Env):
         self.left_joint_path = args.get("left_joint_path", [])
         self.right_joint_path = args.get("right_joint_path", [])
 
-    def _set_eval_video_ffmpeg(self, ffmpeg):
+    def _set_eval_video_ffmpeg(self, ffmpeg=None, ffmpeg_cauchy=None):
         self.eval_video_ffmpeg = ffmpeg
+        self.eval_video_ffmpeg_cauchy = ffmpeg_cauchy
+        print('normal',ffmpeg)
+        print('ffmpeg_cauchy',ffmpeg_cauchy)
 
     def close_env(self, clear_cache=False):
         if clear_cache:
@@ -587,6 +591,10 @@ class Base_Task(gym.Env):
             self.eval_video_ffmpeg.stdin.close()
             self.eval_video_ffmpeg.wait()
             del self.eval_video_ffmpeg
+        if self.eval_video_ffmpeg_cauchy:
+            self.eval_video_ffmpeg_cauchy.stdin.close()
+            self.eval_video_ffmpeg_cauchy.wait()
+            del self.eval_video_ffmpeg_cauchy
 
     def delay(self, delay_time, save_freq=None):
         render_freq = self.render_freq
@@ -1482,8 +1490,15 @@ class Base_Task(gym.Env):
 
         eval_video_freq = 1  # fixed
         if (self.eval_video_path is not None and self.take_action_cnt % eval_video_freq == 0):
-            self.eval_video_ffmpeg.stdin.write(self.now_obs["observation"]["head_camera"]["rgb"].tobytes())
-
+            # save cauchy
+            if self.eval_video_ffmpeg_cauchy:
+                concatenated_rgb = np.ascontiguousarray(np.concatenate([
+                                self.now_obs["observation"]["cauchy_obs_camera1"]["rgb"], 
+                                self.now_obs["observation"]["cauchy_obs_camera2"]["rgb"]],
+                                axis=0))  
+                self.eval_video_ffmpeg_cauchy.stdin.write(concatenated_rgb.tobytes())
+            elif self.eval_video_ffmpeg:
+                self.eval_video_ffmpeg.stdin.write(self.now_obs["observation"]["head_camera"]["rgb"].tobytes())
         self.take_action_cnt += 1
         print(f"step: \033[92m{self.take_action_cnt} / {self.step_lim}\033[0m", end="\r")
 
@@ -1673,12 +1688,19 @@ class Base_Task(gym.Env):
 
             self.scene.step()
             self._update_render()
-                
+
             if self.check_success():
                 self.eval_success = True
                 self.get_obs() # update obs
                 if (self.eval_video_path is not None):
-                    self.eval_video_ffmpeg.stdin.write(self.now_obs["observation"]["head_camera"]["rgb"].tobytes())
+                    if self.eval_video_ffmpeg_cauchy:
+                        concatenated_rgb = np.ascontiguousarray(np.concatenate([
+                                self.now_obs["observation"]["cauchy_obs_camera1"]["rgb"], 
+                                self.now_obs["observation"]["cauchy_obs_camera2"]["rgb"]],
+                                axis=0))  
+                        self.eval_video_ffmpeg_cauchy.stdin.write(concatenated_rgb.tobytes())
+                    elif self.eval_video_ffmpeg:
+                        self.eval_video_ffmpeg.stdin.write(self.now_obs["observation"]["head_camera"]["rgb"].tobytes())
                 return
 
         self._update_render()

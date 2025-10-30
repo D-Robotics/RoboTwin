@@ -16,6 +16,11 @@ import openpi.shared.nnx_utils as nnx_utils
 
 logger = logging.getLogger("openpi")
 
+SKIP, SIGLIP, PALIGEMMA, ACTION = range(4)
+stage = SKIP
+TEST = False
+TEST_SIGLIP = stage == SIGLIP and TEST
+TEST_PALIGEMMA = stage == PALIGEMMA and TEST
 
 def make_attn_mask(input_mask, mask_ar):
     """Adapted from big_vision.
@@ -132,6 +137,26 @@ class Pi0Config(_model.BaseModelConfig):
         return nnx.All(*filters)
 
 
+from jax.experimental import io_callback
+
+def write_mask(arr):
+    filename = f'test/mask.npy'
+    # arr 是从 JAX 张量转换来的 numpy 数组
+    np.save(filename, arr)  # 保存为 numpy 格式
+    # 也可以写入文本文件
+
+
+def write_to_file(arr_py,arr_cpp,count):
+    filename = f'test/{count}_py.npy'
+    # arr 是从 JAX 张量转换来的 numpy 数组
+    np.save(filename, np.array(arr_py))  # 保存为 numpy 格式
+    # 也可以写入文本文件
+    filename = f'test/{count}_cpp.npy'
+    # arr 是从 JAX 张量转换来的 numpy 数组
+    np.save(filename, np.array(arr_cpp))  # 保存为 numpy 格式
+
+    count+=1
+
 class Pi0(_model.BaseModel):
 
     def __init__(self, config: Pi0Config, rngs: nnx.Rngs):
@@ -163,14 +188,38 @@ class Pi0(_model.BaseModel):
 
     @at.typecheck
     def embed_prefix(
-        self, obs: _model.Observation
+        self, obs: _model.Observation,
+        test_obs=None,
+        siglip_result=None,
+        count=0
     ) -> tuple[at.Float[at.Array, "b s emb"], at.Bool[at.Array, "b s"], at.Bool[at.Array, " s"]]:
         input_mask = []
         ar_mask = []
         tokens = []
         # embed images
+        if test_obs:
+            for name in test_obs['images']:
+                image_in = test_obs['images'][name]
+                image_tokens_test, _ = self.PaliGemma.img(image_in, train=False)
+                jax.debug.print('py_test = {raw}',raw = image_tokens_test[0])
+
         for name in obs.images:
-            image_tokens, _ = self.PaliGemma.img(obs.images[name], train=False)
+            if siglip_result:
+                image_tokens = siglip_result[name]
+                image_tokens_raw, _ = self.PaliGemma.img(obs.images[name], train=False)
+              #  jax.debug.print('cpp_result = {raw}',raw = image_tokens[0])
+              #  jax.debug.print('py_result = {raw}',raw = image_tokens[0])
+                if TEST_SIGLIP:
+                    io_callback(
+                    write_to_file,  # 回调函数（纯 Python）
+                        result_shape_dtypes = None,  # 无返回值
+                        arr_py=image_tokens_raw,  # 传递给回调的参数（JAX 张量）
+                        arr_cpp=image_tokens,  # 其他参数（文件名）
+                    count = count
+                    )
+                count+=1
+            else:
+                image_tokens, _ = self.PaliGemma.img(obs.images[name], train=False)
 
             tokens.append(image_tokens)
             input_mask.append(einops.repeat(
@@ -191,6 +240,7 @@ class Pi0(_model.BaseModel):
         tokens = jnp.concatenate(tokens, axis=1)
         input_mask = jnp.concatenate(input_mask, axis=1)
         ar_mask = jnp.array(ar_mask)
+                
         return tokens, input_mask, ar_mask
 
     @at.typecheck
@@ -206,7 +256,7 @@ class Pi0(_model.BaseModel):
         input_mask.append(jnp.ones((obs.state.shape[0], 1), dtype=jnp.bool_))
         # image/language inputs do not attend to state or actions
         ar_mask += [True]
-
+        
         # embed timestep using sine-cosine positional encoding with sensitivity in the range [0, 1]
         time_emb = posemb_sincos(timestep, self.action_in_proj.out_features, min_period=4e-3, max_period=4.0)
         # mix timestep + action information using an MLP
@@ -223,6 +273,7 @@ class Pi0(_model.BaseModel):
         tokens = jnp.concatenate(tokens, axis=1)
         input_mask = jnp.concatenate(input_mask, axis=1)
         ar_mask = jnp.array(ar_mask)
+
         return tokens, input_mask, ar_mask
 
     @override
@@ -263,20 +314,40 @@ class Pi0(_model.BaseModel):
         observation: _model.Observation,
         *,
         num_steps: int | at.Int[at.Array, ""] = 10,
+        test_obs=None,
+        siglip_result = None,
+        kvcache_result = None,
+        count=0
     ) -> _model.Actions:
+
         observation = _model.preprocess_observation(None, observation, train=False)
-        # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
-        # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
+
         dt = -1.0 / num_steps
         batch_size = observation.state.shape[0]
         noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
 
         # first fill KV cache with a forward pass of the prefix
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
-        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
-        positions = jnp.cumsum(prefix_mask, axis=1) - 1
-        _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
+        # prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        # substitute prefix_tokens by remote result
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation, test_obs=test_obs,siglip_result=siglip_result,count=count)
 
+        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
+
+        positions = jnp.cumsum(prefix_mask, axis=1) - 1
+
+        _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
+        if kvcache_result:
+         #   io_callback(write_mask,result_shape_dtypes=None,arr=prefix_attn_mask)  
+         #   jax.debug.print('py={raw}',raw=kv_cache[0][0])
+         #   jax.debug.print('cpp={raw}',raw=kvcache_result[0][0])   
+            if TEST_PALIGEMMA: 
+                io_callback(write_to_file, result_shape_dtypes = None,arr_py=kv_cache[0],arr_cpp=kvcache_result[0],count = count )
+            kv_cache = kvcache_result
+            print("Use CPP kvcache!")
+        else:
+            _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
+
+            
         def step(carry):
             x_t, time = carry
             suffix_tokens, suffix_mask, suffix_ar_mask = self.embed_suffix(observation, x_t,
@@ -286,18 +357,21 @@ class Pi0(_model.BaseModel):
             suffix_attn_mask = make_attn_mask(suffix_mask, suffix_ar_mask)
             # `prefix_attn_mask` is shape (b, suffix_len, prefix_len) indicating how the suffix tokens can attend to the
             # prefix tokens
+
             prefix_attn_mask = einops.repeat(prefix_mask, "b p -> b s p", s=suffix_tokens.shape[1])
             # `combined_mask` is shape (b, suffix_len, prefix_len + suffix_len) indicating how the suffix tokens (which
             # generate the queries) can attend to the full prefix + suffix sequence (which generates the keys and values)
+
             full_attn_mask = jnp.concatenate([prefix_attn_mask, suffix_attn_mask], axis=-1)
             assert full_attn_mask.shape == (
                 batch_size,
                 suffix_tokens.shape[1],
                 prefix_tokens.shape[1] + suffix_tokens.shape[1],
             )
+            io_callback(write_mask,result_shape_dtypes=None,arr=full_attn_mask)  
             # `positions` is shape (b, suffix_len) indicating the positions of the suffix tokens
             positions = jnp.sum(prefix_mask, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
-
+        #    jax.debug.print("positions={a}",a=positions)
             (prefix_out, suffix_out), _ = self.PaliGemma.llm([None, suffix_tokens],
                                                              mask=full_attn_mask,
                                                              positions=positions,
@@ -313,4 +387,67 @@ class Pi0(_model.BaseModel):
             return time >= -dt / 2
 
         x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
+        print(x_0.shape)
         return x_0
+
+import os
+import numpy as np
+os.environ["CUDA_VISIBLE_DEVICES"] = "7" 
+if __name__ == '__main__':
+    B, H, W, C = 1, 224, 224, 3
+    s, l = 32, 48
+
+    # 1. images
+    images: dict[str, jnp.ndarray] = {
+        "base_0_rgb": jnp.array(np.random.uniform(-1, 1, size=(B, H, W, C)), dtype=jnp.float32),
+        "left_wrist_0_rgb": jnp.array(np.random.uniform(-1, 1, size=(B, H, W, C)), dtype=jnp.float32),
+        "right_wrist_0_rgb": jnp.array(np.random.uniform(-1, 1, size=(B, H, W, C)), dtype=jnp.float32)
+    }
+
+    # 2. image_masks
+    image_masks: dict[str, jnp.ndarray] = {
+        "base_0_rgb": jnp.ones((B,), dtype=bool),
+        "left_wrist_0_rgb": jnp.ones((B,), dtype=bool),
+        "right_wrist_0_rgb": jnp.ones((B,), dtype=bool)
+    }
+
+    # 3. state
+    state = jnp.array(np.random.randn(B, s), dtype=jnp.float32)
+
+    # 4. tokenized_prompt (可选)
+    tokenized_prompt = jnp.array(np.random.randint(0, 1000, size=(B, l)), dtype=jnp.int32)
+    tokenized_prompt_mask = jnp.ones((B, l), dtype=bool)
+
+    # 5. token_ar_mask / token_loss_mask (可选)
+    token_ar_mask = jnp.ones((B, l), dtype=jnp.int32)
+    token_loss_mask = jnp.ones((B, l), dtype=bool)
+
+    # 初始化 Observation
+    obs = _model.Observation(
+        images=images,
+        image_masks=image_masks,
+        state=state,
+        tokenized_prompt=tokenized_prompt,
+        tokenized_prompt_mask=tokenized_prompt_mask,
+        token_ar_mask=token_ar_mask,
+        token_loss_mask=token_loss_mask
+    )
+
+    config = Pi0Config()
+    # 创建一个全局随机 key
+    key = jax.random.PRNGKey(42)
+
+    # 拆分成多个子 key
+    keys = jax.random.split(key, 3)
+
+    # 构造 nnx.Rngs
+    rngs = nnx.Rngs(
+        params=keys[0],    # 用于参数初始化
+        dropout=keys[1],   # 用于 dropout 或其他随机操作
+        sampling=keys[2]   # 可选，用于采样等
+    )
+
+    model = Pi0(config=config,rngs=rngs)
+
+    rng = jax.random.PRNGKey(42)
+    model.sample_actions(observation=obs,rng=rng)

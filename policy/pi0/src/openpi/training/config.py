@@ -466,10 +466,10 @@ _CONFIGS = [
             ),
         ),
         freeze_filter=pi0.Pi0Config().get_freeze_filter(),
-        batch_size=32,  # the total batch_size not pre_gpu batch_size
+        batch_size=16,  # the total batch_size not pre_gpu batch_size
         weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_base/params"),
         num_train_steps=30000,
-        fsdp_devices=4,  # refer line 359
+        fsdp_devices=1,  # refer line 359
     ),
     # pi0_fast_base by full
     TrainConfig(

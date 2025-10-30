@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 import logging
 import pathlib
+import struct
 from typing import Any, TypeAlias
 
 import flax
@@ -16,8 +17,33 @@ from openpi.models import model as _model
 from openpi.shared import array_typing as at
 from openpi.shared import nnx_utils
 
+import socket
+import time
+from openpi.models import msg_pb2
+
+from safetensors.torch import load_file
+import torch.nn as nn
+import torch
+import einops
+
 BasePolicy: TypeAlias = _base_policy.BasePolicy
 
+TEST, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION = range(9)
+stage = ACTION
+
+use_raw = stage not in [OBS,PALIGEMMA_FULL,ACTION]
+UINT8, FP16, FP32 = range(3)
+img_out_type = UINT8 if not use_raw else FP16
+
+# test stage
+# SKIP: Robotwin raw procedure
+# TEST: Send local input and receive SIGLIP result
+# OBS: Send and receive raw obs to test mismatch
+# PREPROC: Send and receive preprocessed obs to test mismatch
+# SIGLIP: Send preprocessed obs and receive SIGLIP result
+# SIGLIP_PRJ: Send preprocessed obs and receive SIGLIP result before Linear
+# PALIGEMMA: Send preprocessed obs and receive kv_cache result
+# PALIGEMMA_FULL: Send raw obs and receive kv_cache result
 
 class Policy(BasePolicy):
 
@@ -38,24 +64,463 @@ class Policy(BasePolicy):
         self._sample_kwargs = sample_kwargs or {}
         self._metadata = metadata or {}
 
+        self.listen_fd = None
+        self.sock_fd = None
+        self.seq = 0
+        self.linear = self.load_linear_from_safetensors("/mnt/data/yanjie.shen/RoboTwin/data/linear_extracted.safetensors")
+
+        self.count = 0
+
+    def load_linear_from_safetensors(self,path):
+        params = load_file(path)
+        weight = params["weight"]
+        bias = params["bias"]
+        out_features, in_features = weight.shape
+        linear = nn.Linear(in_features, out_features)
+        linear.weight.data = weight.clone()
+        linear.bias.data = bias.clone()
+        print(f"✅ 已加载 Linear 层: in={in_features}, out={out_features}")
+        return linear
+    
+    def connect(self):
+        def is_connected(sock: socket.socket) -> bool:
+            if sock is None:
+                return False
+            try:
+                sock.getpeername()  # 如果未连接，会抛异常
+                return True
+            except socket.error:
+                return False
+
+        if is_connected(self.sock_fd):
+            return
+        
+        def listen():
+            # 1. 创建 TCP Socket（对应 C++ 的 socket(AF_INET, SOCK_STREAM, 0)）
+            try:
+                # SOCK_STREAM 表示 TCP 协议，AF_INET 表示 IPv4
+                self.listen_fd = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                # 设置端口复用（避免 TIME_WAIT 导致端口无法重启，对应 C++ 的 SO_REUSEADDR）
+                self.listen_fd.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            except OSError as e:
+                print(f"创建 Socket 失败：{str(e)}")
+                return
+            
+            # 2. 绑定端口（对应 C++ 的 bind()，监听 8888 端口）
+            server_addr = ("0.0.0.0", 8888)  # 0.0.0.0 等价于 C++ 的 INADDR_ANY（监听所有网卡）
+            try:
+                self.listen_fd.bind(server_addr)
+            except OSError as e:
+                print(f"绑定端口失败：{str(e)}")
+                self.listen_fd.close()
+                return
+
+            # 3. 开始监听连接（对应 C++ 的 listen()，backlog=5）
+            try:
+                self.listen_fd.listen(5)  # backlog：等待队列最大长度
+                print("服务器启动成功，等待客户端连接...（端口：8888）")
+            except OSError as e:
+                print(f"监听失败：{str(e)}")
+                self.listen_fd.close()
+                return
+        
+            # 4. 接受客户端连接（对应 C++ 的 accept()，阻塞直到有连接）
+            try:
+                # client_addr：存储客户端地址信息，addr_len：地址长度
+                self.sock_fd, client_addr = self.listen_fd.accept()
+                print(f"客户端已连接：IP={client_addr[0]}, 端口={client_addr[1]}")
+            except OSError as e:
+                print(f"接受连接失败：{str(e)}")
+                self.listen_fd.close()
+                return
+            
+        listen()
+        
+    def send(self, observation:dict):
+        sock = self.sock_fd
+        """发送多模态输入消息"""
+        input_msg = msg_pb2.MultiModalInput()
+
+        def build_header(seq):
+            """构建Header消息"""
+            header = msg_pb2.Header()
+            header.seq = seq
+    
+            def get_current_time():
+                """获取当前时间(秒和纳秒)"""
+                current = time.time()
+                sec = int(current)
+                nsec = int((current - sec) * 1e9)
+                return sec, nsec
+
+            sec, nsec = get_current_time()
+            header.stamp.sec = sec
+            header.stamp.nsec = nsec
+            header.frame_id = "camera_optical_frame"
+            return header
+        
+        # 设置Header
+        header = build_header(self.seq)
+        self.seq += 1
+        
+        input_msg.header.CopyFrom(header)
+        
+        img_dtypes = [msg_pb2.Tensor.UINT8, msg_pb2.Tensor.FLOAT32]
+        lang_dtypes = [msg_pb2.Tensor.STRING, msg_pb2.Tensor.INT32]
+        state_dtypes = [msg_pb2.Tensor.FLOAT64,msg_pb2.Tensor.FLOAT32]
+
+        # 添加图像Tensor
+        for img in observation["images"].values():
+            image = input_msg.images.add()
+            image.dtype = img_dtypes[use_raw]
+            if img_out_type == FP16:
+                img = img.astype(jnp.float16)
+                img = jnp.moveaxis(img,3,1)
+                print('shape sent:',img.shape)
+                image.dtype = msg_pb2.Tensor.FP16
+            image.shape.extend(img.shape)
+            image.data = img.tobytes()
+
+        # 添加语言Tensor
+        language = input_msg.languages.add()
+        language.dtype = lang_dtypes[use_raw]
+        language.shape.extend(observation["prompt"].shape)
+        language.data = observation["prompt"].encode("utf-8") if not use_raw else observation["prompt"].tobytes()
+        
+        # 添加状态Tensor
+        state = input_msg.states.add()
+        state.dtype = msg_pb2.Tensor.FLOAT32
+        state.shape.extend(observation["state"].shape)
+        print('state sent:',observation["state"].shape)
+        state.data = observation["state"].astype(np.float32).tobytes()
+
+        # 发送消息
+        def send_proto_message(sock: socket.socket, msg) -> bool:
+            try:
+                # 1. 序列化 Protobuf 消息
+                serialized_data = msg.SerializeToString()
+                data_len = len(serialized_data)
+                print(f"待发送数据长度：{data_len}字节")
+
+                # 2. 关键：长度字段按“大端字节序”打包（与 C++ 网络序一致）
+                net_len = socket.htonl(data_len)  # 主机序→网络序（大端）
+                net_len_bytes = struct.pack("<I", net_len)  # 大端打包为 4 字节
+                # 验证长度字段是否为 4 字节（必须满足）
+                assert len(net_len_bytes) == 4, f"长度字段应为4字节，实际{len(net_len_bytes)}字节"
+
+                print(f"待发送的长度字段（十六进制）：{net_len_bytes.hex()}")
+                # 3. 先发送长度，再发送数据
+                sock.sendall(net_len_bytes)  # 发送 4 字节长度
+                print(f"发送的长度字段（十六进制）：{net_len_bytes.hex()}")
+                
+                sock.sendall(serialized_data)  # 发送 Protobuf 数据
+                print(f"发送成功：长度字段4字节 + 数据{data_len}字节")
+                return True
+            except Exception as e:
+                print(f"发送失败：{str(e)}")
+                return False
+            
+        send_proto_message(sock, input_msg)
+    
+    def receive(self):
+        batch = msg_pb2.MultiModalInput()
+        sock = self.sock_fd
+
+        def parse_header(header):
+            """解析并打印Header信息"""
+            print("===== 解析 Header 信息 =====")
+            print(f"消息序列号 (seq): {header.seq}")
+            print(f"时间戳: {header.stamp.sec} 秒 {header.stamp.nsec} 纳秒")
+            time_sec = header.stamp.sec + header.stamp.nsec / 1e9
+            print(f"（等价于 {time_sec} 秒）")
+            print(f"坐标系 ID (frame_id): {header.frame_id}")
+            print("===========================")    
+        
+        def recv_proto_message(sock, msg):
+            """接收protobuf消息(先接收长度，再接收数据)"""
+            try:
+                # 1. 接收 4 字节长度（网络序→大端）
+                net_len_data = sock.recv(4)
+                if len(net_len_data) != 4:
+                    print("未收到完整长度（需4字节，实际收到{}字节）".format(len(net_len_data)))
+                    return False
+
+                # 关键：用 ">I"（大端）解析 4 字节无符号整数（与 C++ 的 htonl 对应）
+                net_len = struct.unpack("<I", net_len_data)[0]
+                # 网络序转主机序（若系统是小端，此步必须；大端系统可省略，但建议保留兼容性）
+                data_len = socket.ntohl(net_len)
+
+                print(f"解析到数据长度：{data_len}字节（等待接收）")  # 加日志验证长度是否合理
+
+                # 接收数据
+                serialized_data = b''
+                while len(serialized_data) < data_len:
+                    chunk = sock.recv(min(4096, data_len - len(serialized_data)))
+                    if not chunk:
+                        print("连接断开")
+                        return False
+                    serialized_data += chunk
+
+                # 反序列化
+                msg.ParseFromString(serialized_data)
+                print(f"接收成功，长度：{data_len}字节")
+                return True
+            except Exception as e:
+                print(f"接收失败：{str(e)}")
+                return False
+            
+        if recv_proto_message(sock, batch):
+            # 解析Header
+            parse_header(batch.header)
+
+            def parse_type(input):
+                if input.dtype == msg_pb2.Tensor.STRING:
+                    arr = input.data
+                    return arr.decode('utf-8')
+                elif input.dtype == msg_pb2.Tensor.UINT8:
+                    arr = np.frombuffer(input.data, dtype=np.uint8)
+                elif input.dtype == msg_pb2.Tensor.FLOAT64:
+                    arr = np.frombuffer(input.data, dtype=np.float64)
+                elif input.dtype == msg_pb2.Tensor.FLOAT32:
+                    arr = np.frombuffer(input.data, dtype=np.float32)
+                elif input.dtype == msg_pb2.Tensor.INT32:
+                    arr = np.frombuffer(input.data, dtype=np.int32)
+                elif input.dtype == msg_pb2.Tensor.FP16:
+                    arr = np.frombuffer(input.data, dtype=np.float16)
+
+                return arr.reshape(input.shape)
+
+            # 解析图片张量
+            imgs= []
+            img_size = len(batch.images)
+            print(f"接收到 {img_size} 个图像张量：")
+            for i in range(img_size):
+                img = batch.images[i]
+                print(f"  语言{i}：类型={img.dtype}，维度=", end="")
+                for dim in img.shape:
+                    print(f"{dim} ", end="")
+                print()
+                imgs.append(parse_type(img))
+
+            # 解析语言张量
+            langs= []
+            lang_size = len(batch.languages)
+            print(f"接收到 {lang_size} 个嵌入张量：")
+            for i in range(lang_size):
+                lang = batch.languages[i]
+                print(f"  语言{i}：类型={lang.dtype}，维度=", end="")
+                for dim in lang.shape:
+                    print(f"{dim} ", end="")
+                print()
+                langs.append(parse_type(lang))
+
+            # 解析状态张量
+            states= []
+            state_size = len(batch.states)
+            print(f"接收到 {state_size} 个状态张量：")
+            for i in range(state_size):
+                state = batch.states[i]
+                print(f"  语言{i}：类型={state.dtype}，维度=", end="")
+                for dim in state.shape:
+                    print(f"{dim} ", end="")
+                print()
+                states.append(parse_type(state))
+
+            print("解析完成\n")
+
+            img_keys = [['cam_high', 'cam_left_wrist', 'cam_right_wrist'],
+                        ['base_0_rgb','left_wrist_0_rgb','right_wrist_0_rgb']]
+
+            obs = {}
+            if imgs:
+                obs["images"]=dict(zip(img_keys[use_raw],imgs))
+            if states:
+                obs["state"]=states[0]
+            if langs:
+                obs["prompt"]=langs[0]
+            
+            return obs
+        
+        return None
+    
+    def proc_recv(self,recv_data):
+        return recv_data
+
+    def proc_siglip(self,recv_data):
+        siglip_in = recv_data["images"]
+        siglip_out = {}
+        if stage == SIGLIP_PRJ:
+            for key, emb in siglip_in.items():
+                print(key,emb)
+                siglip_prj = self.linear(torch.from_numpy(emb).to(torch.bfloat16)).to(torch.float16).detach().cpu().numpy()
+                siglip_out[key]= siglip_prj
+        else:
+            siglip_out = siglip_in
+
+        siglip_jax = jax.tree.map(
+            lambda x: jnp.array(x, dtype=jnp.bfloat16),
+            siglip_out
+        )
+        return siglip_jax
+
+    def proc_action(self,recv_data):
+        paligemma_in = np.array(recv_data["prompt"],dtype=np.float16)
+        paligemma_jax = jax.tree.map(
+            lambda x: jnp.array(x, dtype=jnp.bfloat16),
+            paligemma_in
+        )
+        return paligemma_jax
+    
+    def proc_paligemma(self,recv_data):
+        paligemma_in = np.array(recv_data["prompt"],dtype=np.float32)
+        paligemma_out = (paligemma_in[:18],paligemma_in[18:])
+
+        paligemma_jax = jax.tree.map(
+            lambda x: jnp.array(x, dtype=jnp.bfloat16),
+            paligemma_out
+        )
+        return paligemma_jax
+    
     @override
     def infer(self, obs: dict) -> dict:  # type: ignore[misc]
+        # PATCH
+        def dict_equal(d1, d2, atol=1e-6):
+            if not (isinstance(d1, dict) and isinstance(d2, dict)):
+                return False
+            if d1.keys() != d2.keys():
+                return False
+            for key in d1:
+                v1, v2 = d1[key], d2[key]
+                if isinstance(v1, dict) and isinstance(v2, dict):
+                    if not dict_equal(v1, v2, atol=atol):
+                        return False
+                elif isinstance(v1, np.ndarray):
+                    v2 = np.array(v2)
+                    v2 = np.squeeze(v2)
+                    if v1.shape != v2.shape:
+                        print(v1.shape, v2.shape)
+                        return False
+                    if not np.allclose(v1, v2, atol=atol):
+                        with open('1.txt','w') as f:
+                            for i in range(v1.shape[0]):
+                                if not np.allclose(v1[i], v2[i], atol=atol):
+                                    f.write(str(v1[i])+'\n')
+                                    f.write(str(v2[i])+'\n')
+                                    print(i)
+                                    break
+
+                        return False
+                elif isinstance(v1, (list, tuple)) and isinstance(v2, (list, tuple)):
+                    if len(v1) != len(v2):
+                        return False
+                    for elem1, elem2 in zip(v1, v2):
+                        if not dict_equal(elem1, elem2, atol=atol):
+                            return False
+                else:
+                    if v1 != v2:
+                        return False
+                return True
+
+        if stage != SKIP:
+            self.connect()
+
+        siglip_result = None
+        kvcache_result = None
+        action_result = None
+        if stage == OBS:
+            self.send(obs)
+            recv_data = self.receive()
+            obs_old = obs   
+            obs = self.proc_recv(recv_data)
+              
+            assert dict_equal(obs,obs_old) ,"recv mismatch!"
+        # PATCH END
+
+        input_at = list(obs['images'].values())
+     #   for i,img in enumerate(input_at):
+     #       np.save(f'proc/{i}_img_raw_py.npy',np.array(img))
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
         inputs = self._input_transform(inputs)
         # Make a batch and convert to jax.Array.
+        input_at = list(inputs['image'].values())
+   #     for i,img in enumerate(input_at):
+    #        np.save(f'proc/{i}_img_py.npy',np.array(img))
         inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
 
         self._rng, sample_rng = jax.random.split(self._rng)
+
+        if stage == PREPROC or stage == SIGLIP or stage == SIGLIP_PRJ or stage == PALIGEMMA or stage == TEST:
+            obs = _model.Observation.from_dict(inputs)
+            obs = _model.preprocess_observation(None, obs, train=False)
+            obs = {
+                'images':obs.images,
+                'state':obs.state,
+                'prompt':obs.tokenized_prompt
+            }
+            if stage == TEST:
+                test_result_bchw= np.fromfile("/mnt/data/yanjie.shen/RoboTwin/policy/pi0/test/input.bin", dtype=np.float16).reshape(1,3,224,224)
+               # test_result_bchw = np.load("/mnt/data/yanjie.shen/RoboTwin/policy/pi0/test/front_0.png.npy")
+               # test_result = jnp.moveaxis(jnp.array(test_result_bchw),1,-1)
+                test_result = jnp.transpose(jnp.array(test_result_bchw), (0, 2, 3, 1))
+                print('shape_in',test_result.shape)
+                print('vector_in',test_result)
+                obs["images"]['base_0_rgb'] = test_result
+                obs["images"]['left_wrist_0_rgb'] = test_result
+                obs["images"]['right_wrist_0_rgb'] = test_result
+    
+            self.send(obs)
+            print('wait receive')
+            recv_data = self.receive()
+        
+        if stage in [PALIGEMMA_FULL,ACTION]:
+            self.send(obs)
+  
+            obs = _model.Observation.from_dict(inputs)
+            obs = _model.preprocess_observation(None, obs, train=False)
+            obs = {
+                'images':obs.images,
+                'state':obs.state,
+                'prompt':obs.tokenized_prompt
+            }
+       #     print("state",obs["state"])
+
+       #     for i,img in enumerate(obs['images'].values()):
+       #         np.save(f'proc/{i}_img_py.npy',np.array(img))
+       #     np.save(f'proc/0_token_py.npy',np.array(obs['prompt']))
+            print('wait receive')           
+            recv_data = self.receive()
+  
+
+        if stage == PREPROC:
+            obs_old = obs
+            obs = self.proc_recv(recv_data)
+            assert dict_equal(obs,obs_old) ,"recv mismatch!"
+        elif stage == SIGLIP or stage == SIGLIP_PRJ or stage == TEST:
+            siglip_result = self.proc_siglip(recv_data)
+        elif stage == PALIGEMMA or stage == PALIGEMMA_FULL:
+            kvcache_result = self.proc_paligemma(recv_data)
+        elif stage == ACTION:
+            action_result = self.proc_action(recv_data)
+
         outputs = {
             "state": inputs["state"],
-            "actions": self._sample_actions(sample_rng, _model.Observation.from_dict(inputs), **self._sample_kwargs),
+            "actions": self._sample_actions(sample_rng, _model.Observation.from_dict(inputs), **self._sample_kwargs,test_obs=None, siglip_result=siglip_result,kvcache_result=kvcache_result,count=self.count),
         }
+        self.count +=3 
+
+        if stage == ACTION:
+            print('raw action',outputs["actions"])
+            print('cpp action',action_result)
+            np.save("test/py_act.npy",np.array(outputs["actions"]))
+            np.save("test/cpp_act.npy",np.array(action_result))
+            outputs["actions"] = action_result
 
         # Unbatch and convert to np.ndarray.
         outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
         return self._output_transform(outputs)
 
+        
     @property
     def metadata(self) -> dict[str, Any]:
         return self._metadata

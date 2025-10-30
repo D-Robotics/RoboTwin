@@ -110,6 +110,7 @@ class Observation(Generic[ArrayT]):
         for key in data["image"]:
             if data["image"][key].dtype == np.uint8:
                 data["image"][key] = data["image"][key].astype(np.float32) / 255.0 * 2.0 - 1.0
+            # preproc norm
         return cls(
             images=data["image"],
             image_masks=data["image_mask"],
@@ -149,11 +150,11 @@ def preprocess_observation(
         raise ValueError(f"images dict missing keys: expected {image_keys}, got {list(observation.images)}")
 
     batch_shape = observation.state.shape[:-1]
-
     out_images = {}
     for key in image_keys:
         image = observation.images[key]
         if image.shape[1:3] != image_resolution:
+            print('resize',key)
             logger.info(f"Resizing image {key} from {image.shape[1:3]} to {image_resolution}")
             image = image_tools.resize_with_pad(image, *image_resolution)
 

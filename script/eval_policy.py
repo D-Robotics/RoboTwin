@@ -19,11 +19,21 @@ import importlib
 import argparse
 import pdb
 
+import imageio_ffmpeg as ffmpeg
+ffmpeg_path = ffmpeg.get_ffmpeg_exe()
+
 from generate_episode_instructions import *
 
 current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
 
+import pickle
+RND = False
+sample = 1
+
+USE_CAUCHY_CAMERA =  False
+HD = False
+USE_VIDEO = True
 
 def class_decorator(task_name):
     envs_module = importlib.import_module(f"envs.{task_name}")
@@ -126,8 +136,13 @@ def main(usr_args):
 
     if args["eval_video_log"]:
         video_save_dir = save_dir
-        camera_config = get_camera_config(args["camera"]["head_camera_type"])
-        video_size = str(camera_config["w"]) + "x" + str(camera_config["h"])
+        if USE_CAUCHY_CAMERA:
+            video_size = str(320) + "x" + str(240*2)
+            if HD:
+                video_size = str(640) + "x" + str(480*2)
+        else:
+            camera_config = get_camera_config(args["camera"]["head_camera_type"])
+            video_size = str(camera_config["w"]) + "x" + str(camera_config["h"])
         video_save_dir.mkdir(parents=True, exist_ok=True)
         args["eval_video_save_dir"] = video_save_dir
 
@@ -163,7 +178,7 @@ def main(usr_args):
     topk = 1
 
     model = get_model(usr_args)
-    st_seed, suc_num = eval_policy(task_name,
+    st_seed, suc_num, suc_list = eval_policy(task_name,
                                    TASK_ENV,
                                    args,
                                    model,
@@ -181,6 +196,7 @@ def main(usr_args):
         file.write(f"Instruction Type: {instruction_type}\n\n")
         # file.write(str(task_reward) + '\n')
         file.write("\n".join(map(str, np.array(suc_nums) / test_num)))
+        file.write(f"\n{suc_list}")
 
     print(f"Data has been saved to {file_path}")
     # return task_reward
@@ -212,12 +228,30 @@ def eval_policy(task_name,
     now_seed = st_seed
     task_total_reward = 0
     clear_cache_freq = args["clear_cache_freq"]
-
     args["eval_mode"] = True
 
+    suc_list = []
     while succ_seed < test_num:
         render_freq = args["render_freq"]
         args["render_freq"] = 0
+
+        if USE_CAUCHY_CAMERA:
+            cauchy_obs_camera1 = {
+                'name': 'cauchy_obs_camera1', 
+                'type': 'Cauchy_OBS', 
+                'position': [-0.032, -0.45, 1.35], 
+                'forward': [0, 0.6, -0.8], 
+                'left': [-1, 0, 0]
+                }
+            cauchy_obs_camera2 = {
+                'name': 'cauchy_obs_camera2', 
+                'type': 'Cauchy_OBS', 
+                'position': [0.1, -0.45, 1.35],   # 微右移
+                'forward': [-0.6, 0, -0.1],       # 左方偏下
+                'left': [0, -1, 0]                # 左边方向
+            }   
+            args["left_embodiment_config"]["static_camera_list"].append(cauchy_obs_camera1)
+            args["left_embodiment_config"]["static_camera_list"].append(cauchy_obs_camera2)
 
         if expert_check:
             try:
@@ -256,37 +290,77 @@ def eval_policy(task_name,
         TASK_ENV.setup_demo(now_ep_num=now_id, seed=now_seed, is_test=True, **args)
         episode_info_list = [episode_info["info"]]
         results = generate_episode_descriptions(args["task_name"], episode_info_list, test_num)
-        instruction = np.random.choice(results[0][instruction_type])
+        if RND:
+            instruction = np.random.choice(results[0][instruction_type])
+            with open(f'./eval_data/{sample}/{now_id}_inst.pkl','wb') as f:
+                pickle.dump(instruction,f)
+            print(f'inst {now_id}')
+        else:
+            with open(f'./eval_data/{sample}/{now_id}_inst.pkl','rb') as f:
+                instruction = pickle.load(f)
+            print(f'load {now_id}')
+            
         TASK_ENV.set_instruction(instruction=instruction)  # set language instruction
 
-        if TASK_ENV.eval_video_path is not None:
-            ffmpeg = subprocess.Popen(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-loglevel",
-                    "error",
-                    "-f",
-                    "rawvideo",
-                    "-pixel_format",
-                    "rgb24",
-                    "-video_size",
-                    video_size,
-                    "-framerate",
-                    "10",
-                    "-i",
-                    "-",
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-vcodec",
-                    "libx264",
-                    "-crf",
-                    "23",
-                    f"{TASK_ENV.eval_video_path}/episode{TASK_ENV.test_num}.mp4",
-                ],
-                stdin=subprocess.PIPE,
-            )
-            TASK_ENV._set_eval_video_ffmpeg(ffmpeg)
+        if USE_VIDEO:
+            if TASK_ENV.eval_video_path is not None:
+                ffmpeg = subprocess.Popen(
+                    [
+                    #  "ffmpeg",
+                        ffmpeg_path,
+                        "-y",
+                        "-loglevel",
+                        "error",
+                        "-f",
+                        "rawvideo",
+                        "-pixel_format",
+                        "rgb24",
+                        "-video_size",
+                        video_size,
+                        "-framerate",
+                        "10",
+                        "-i",
+                        "-",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-vcodec",
+                        "libx264",
+                        "-crf",
+                        "23",
+                        f"{TASK_ENV.eval_video_path}/episode{TASK_ENV.test_num}.mp4",
+                    ],
+                    stdin=subprocess.PIPE,
+                ) if not USE_CAUCHY_CAMERA else None
+                ffmpeg_cauchy = subprocess.Popen(
+                    [
+                    #  "ffmpeg",
+                        ffmpeg_path,
+                        "-y",
+                        "-loglevel",
+                        "error",
+                        "-f",
+                        "rawvideo",
+                        "-pixel_format",
+                        "rgb24",
+                        "-video_size",
+                        video_size,
+                        "-framerate",
+                        "10",
+                        "-i",
+                        "-",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-vcodec",
+                        "libx264",
+                        "-crf",
+                        "23",
+                        f"{TASK_ENV.eval_video_path}/episode{TASK_ENV.test_num}_cauchy.mp4",
+                    ],
+                    stdin=subprocess.PIPE,
+                ) if USE_CAUCHY_CAMERA else None
+                TASK_ENV._set_eval_video_ffmpeg(ffmpeg, ffmpeg_cauchy)
+        else:
+            TASK_ENV._set_eval_video_ffmpeg()
 
         succ = False
         reset_func(model)
@@ -303,6 +377,8 @@ def eval_policy(task_name,
         if succ:
             TASK_ENV.suc += 1
             print("\033[92mSuccess!\033[0m")
+            suc_list.append(TASK_ENV.test_num)
+
         else:
             print("\033[91mFail!\033[0m")
 
@@ -321,7 +397,7 @@ def eval_policy(task_name,
         # TASK_ENV._take_picture()
         now_seed += 1
 
-    return now_seed, TASK_ENV.suc
+    return now_seed, TASK_ENV.suc, suc_list
 
 
 def parse_args_and_config():

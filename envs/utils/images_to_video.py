@@ -4,7 +4,11 @@ import os
 import subprocess
 import pickle
 import pdb
+import imageio_ffmpeg as ffmpeg
 
+# 获取 ffmpeg 可执行路径
+ffmpeg_path = ffmpeg.get_ffmpeg_exe()
+print(ffmpeg_path)
 
 def images_to_video(imgs: np.ndarray, out_path: str, fps: float = 30.0, is_rgb: bool = True) -> None:
     if (not isinstance(imgs, np.ndarray) or imgs.ndim != 4 or imgs.shape[3] not in (3, 4)):
@@ -17,7 +21,8 @@ def images_to_video(imgs: np.ndarray, out_path: str, fps: float = 30.0, is_rgb: 
         pixel_format = "rgba"
     ffmpeg = subprocess.Popen(
         [
-            "ffmpeg",
+          #  "ffmpeg",
+          ffmpeg_path,
             "-y",
             "-loglevel",
             "error",
