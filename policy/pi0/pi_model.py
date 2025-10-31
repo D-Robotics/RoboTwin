@@ -24,8 +24,8 @@ from openpi.training import config as _config
 from openpi.training import data_loader as _data_loader
 
 import os
-os.environ["TORCH_LOGS"] = "off"
-os.environ["PYTORCH_TRTON_DISABLE"] = "1"
+#os.environ["TORCH_LOGS"] = "off"
+#os.environ["PYTORCH_TRTON_DISABLE"] = "1"
 
 class PI0:
     def __init__(self, train_config_name, model_name, checkpoint_id, pi0_step):

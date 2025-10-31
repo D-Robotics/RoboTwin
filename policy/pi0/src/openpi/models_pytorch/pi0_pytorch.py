@@ -1,6 +1,7 @@
 import logging
 import math
 
+
 import torch
 from torch import Tensor
 from torch import nn
@@ -11,7 +12,7 @@ from openpi.models_pytorch.gemma_pytorch import PaliGemmaWithExpertModel
 import openpi.models_pytorch.preprocessing_pytorch as _preprocessing
 import numpy as np
 import sys
-import os
+
 
 TEST, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION, ACTION_B= range(10)
 def save_kv_cache(cache_instance, save_dir):
@@ -493,7 +494,7 @@ class PI0Pytorch(nn.Module):
             count += 1
             time += dt
         self.save_index += 1
-        return past_key_values, x_t
+        return None, x_t
 
     def denoise_step(
         self,
