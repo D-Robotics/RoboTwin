@@ -471,9 +471,7 @@ class Policy(BasePolicy):
             if noise.ndim == 2:  # If noise is (action_horizon, action_dim), add batch dimension
                 noise = noise[None, ...]  # Make it (1, action_horizon, action_dim)
             sample_kwargs["noise"] = noise            
-
-        inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
-
+            
         self._rng, sample_rng = jax.random.split(self._rng)
 
         if stage == PREPROC or stage == SIGLIP or stage == SIGLIP_PRJ or stage == PALIGEMMA or stage == TEST:
@@ -539,11 +537,6 @@ class Policy(BasePolicy):
             "actions": actions,
         }
         self.count +=1
-        
-        if self._is_pytorch_model:
-            outputs = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), outputs)
-        else:
-            outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
 
         if stage == ACTION or stage == ACTION_B:
             print('raw action',outputs["actions"])
@@ -553,9 +546,12 @@ class Policy(BasePolicy):
             outputs["actions"] = action_result
 
         # Unbatch and convert to np.ndarray.
-        outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
+        if self._is_pytorch_model:
+            outputs = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), outputs)
+        else:
+            outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
+            
         return self._output_transform(outputs)
-
         
     @property
     def metadata(self) -> dict[str, Any]:

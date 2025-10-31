@@ -463,9 +463,7 @@ class PI0Pytorch(nn.Module):
 
         x_t = noise
         time = torch.tensor(1.0, dtype=torch.float32, device=device)
-        
-        if stage == ACTION_B:
-            return past_key_values
+
         npy_save_path = f"/mnt/data/weiyang.hu/openpi/gemma_expert_npy_calibration/{self.save_index}/"
         print("Saving to:", npy_save_path)
         save_kv_cache(past_key_values, npy_save_path)
@@ -495,7 +493,7 @@ class PI0Pytorch(nn.Module):
             count += 1
             time += dt
         self.save_index += 1
-        return x_t
+        return past_key_values, x_t
 
     def denoise_step(
         self,
