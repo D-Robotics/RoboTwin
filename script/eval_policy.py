@@ -6,7 +6,7 @@ sys.path.append("./")
 sys.path.append(f"./policy")
 sys.path.append("./description/utils")
 
-# os.environ["TORCHDYNAMO_DISABLE"] = "1"
+os.environ["TORCHDYNAMO_DISABLE"] = "1"
 # os.environ["TORCH_COMPILE_DISABLE"] = "1"
 # 可选，确保不会触发 triton 检查
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0" 

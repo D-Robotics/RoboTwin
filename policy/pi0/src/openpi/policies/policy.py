@@ -63,12 +63,10 @@ class Policy(BasePolicy):
         self._model = model
         self._input_transform = _transforms.compose(transforms)
         self._output_transform = _transforms.compose(output_transforms)
-        self._rng = rng or jax.random.key(0)
         self._sample_kwargs = sample_kwargs or {}
         self._metadata = metadata or {}
         self._is_pytorch_model = is_pytorch
         self._pytorch_device = pytorch_device
-
         if self._is_pytorch_model:
             self._model = self._model.to(pytorch_device)
             self._model.eval()
@@ -84,17 +82,6 @@ class Policy(BasePolicy):
 
         self.count = 0
 
-    def load_linear_from_safetensors(self,path):
-        params = load_file(path)
-        weight = params["weight"]
-        bias = params["bias"]
-        out_features, in_features = weight.shape
-        linear = nn.Linear(in_features, out_features)
-        linear.weight.data = weight.clone()
-        linear.bias.data = bias.clone()
-        print(f"✅ 已加载 Linear 层: in={in_features}, out={out_features}")
-        return linear
-    
     def connect(self):
         def is_connected(sock: socket.socket) -> bool:
             if sock is None:
@@ -471,8 +458,6 @@ class Policy(BasePolicy):
             if noise.ndim == 2:  # If noise is (action_horizon, action_dim), add batch dimension
                 noise = noise[None, ...]  # Make it (1, action_horizon, action_dim)
             sample_kwargs["noise"] = noise            
-            
-        self._rng, sample_rng = jax.random.split(self._rng)
 
         if stage == PREPROC or stage == SIGLIP or stage == SIGLIP_PRJ or stage == PALIGEMMA or stage == TEST:
             obs = _model.Observation.from_dict(inputs)
