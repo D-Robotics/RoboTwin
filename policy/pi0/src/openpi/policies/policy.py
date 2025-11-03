@@ -28,9 +28,9 @@ import einops
 
 BasePolicy: TypeAlias = _base_policy.BasePolicy
 
-TEST, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION, ACTION_B= range(10)
+TEST, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION, ACTION_B, FULL= range(11)
 
-stage = SKIP
+stage = ACTION_B
 
 use_raw = stage not in [OBS,PALIGEMMA_FULL,ACTION]
 UINT8, FP16, FP32 = range(3)
@@ -46,6 +46,51 @@ img_out_type = UINT8 if not use_raw else FP16
 # PALIGEMMA: Send preprocessed obs and receive kv_cache result
 # PALIGEMMA_FULL: Send raw obs and receive kv_cache result
 
+
+from scipy.signal import butter
+
+class MultiChannelButterworth:
+    def __init__(self, cutoff, fs, channels, order=2):
+        self.b, self.a = butter(order, cutoff / (0.5 * fs), btype='low')
+        self.order = order
+        self.channels = channels
+        self.x_hist = np.zeros((len(self.b), channels))
+        self.y_hist = np.zeros((len(self.a), channels))
+
+    def filter(self, x):
+
+        x = np.asarray(x)
+        assert x.shape == (self.channels,), f"Expected shape ({self.channels},), got {x.shape}"
+        # Shift history 
+        
+        self.x_hist[1:] = self.x_hist[:-1]
+        self.x_hist[0] = x
+
+        self.y_hist[1:] = self.y_hist[:-1]
+
+        # Compute output per channel
+        y = (self.b[:, None] * self.x_hist).sum(axis=0) - \
+            (self.a[1:, None] * self.y_hist[1:]).sum(axis=0)
+        y /= self.a[0]
+
+        self.y_hist[0] = y
+        return y
+
+
+fs = 50       # 采样率 50Hz
+cutoff = 1    # 截止频率 5Hz
+channels = 14 if stage == FULL else 32 # 三通道数据（如加速度 X/Y/Z）
+
+filt = MultiChannelButterworth(cutoff, fs, channels)
+
+def filter(arr):
+    filtered = np.zeros_like(arr)
+    for i in range(arr.shape[0]):
+        filtered[i,:] = filt.filter(arr[i,:])
+    return arr
+
+
+import openpi.models_pytorch.preprocessing_pytorch as _preprocessing
 class Policy(BasePolicy):
 
     def __init__(
@@ -167,10 +212,9 @@ class Policy(BasePolicy):
         
         img_dtypes = [msg_pb2.Tensor.UINT8, msg_pb2.Tensor.FLOAT32]
         lang_dtypes = [msg_pb2.Tensor.STRING, msg_pb2.Tensor.INT32]
-        state_dtypes = [msg_pb2.Tensor.FLOAT64,msg_pb2.Tensor.FLOAT32]
 
         # 添加图像Tensor
-        if type(observation["images"] is dict):
+        if type(observation["images"]) is dict:
             for img in observation["images"].values():
                 image = input_msg.images.add()
                 image.dtype = img_dtypes[use_raw]
@@ -183,24 +227,23 @@ class Policy(BasePolicy):
                 image.data = img.tobytes()
         else:
             # send kvcache
-            for img in observation["images"]:
-                image = input_msg.images.add()
-                img = img.astype(jnp.float16)
-                image.dtype = msg_pb2.Tensor.FP16
-                image.shape.extend(img.shape)
-                image.data = img.tobytes()
+            img = observation["images"]
+            image = input_msg.images.add()
+            img = img.astype(jnp.float32)
+            image.dtype = msg_pb2.Tensor.FLOAT32
+            image.shape.extend(img.shape)
+            image.data = img.tobytes()
 
         # 添加语言Tensor
         language = input_msg.languages.add()
         language.dtype = lang_dtypes[use_raw]
         language.shape.extend(observation["prompt"].shape)
-        language.data = observation["prompt"].encode("utf-8") if not use_raw else observation["prompt"].tobytes()
-        
+        language.data = observation["prompt"].encode("utf-8") if not use_raw else observation["prompt"].astype(np.float32).tobytes()
+               
         # 添加状态Tensor
         state = input_msg.states.add()
         state.dtype = msg_pb2.Tensor.FLOAT32
         state.shape.extend(observation["state"].shape)
-        print('state sent:',observation["state"].shape)
         state.data = observation["state"].astype(np.float32).tobytes()
 
         # 发送消息
@@ -365,10 +408,13 @@ class Policy(BasePolicy):
 
     def proc_action(self,recv_data):
         paligemma_in = np.array(recv_data["prompt"],dtype=np.float16)
-        paligemma_jax = jax.tree.map(
-            lambda x: jnp.array(x, dtype=jnp.bfloat16),
-            paligemma_in
-        )
+        if self._is_pytorch_model:
+            paligemma_jax = torch.tensor(paligemma_in)
+        else:
+            paligemma_jax = jax.tree.map(
+                lambda x: jnp.array(x, dtype=jnp.bfloat16),
+                paligemma_in
+            )
         return paligemma_jax
     
     def proc_paligemma(self,recv_data):
@@ -459,9 +505,9 @@ class Policy(BasePolicy):
                 noise = noise[None, ...]  # Make it (1, action_horizon, action_dim)
             sample_kwargs["noise"] = noise            
 
-        if stage == PREPROC or stage == SIGLIP or stage == SIGLIP_PRJ or stage == PALIGEMMA or stage == TEST:
+        if stage in [PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, TEST]:
             obs = _model.Observation.from_dict(inputs)
-            obs = _model.preprocess_observation(None, obs, train=False)
+            obs = _preprocessing.preprocess_observation_pytorch(obs ,train=False)
             obs = {
                 'images':obs.images,
                 'state':obs.state,
@@ -484,12 +530,12 @@ class Policy(BasePolicy):
             self.send(obs)
   
             obs = _model.Observation.from_dict(inputs)
-            obs = _model.preprocess_observation(None, obs, train=False)
+            obs =  _preprocessing.preprocess_observation_pytorch(obs ,train=False)
             obs = {
                 'images':obs.images,
                 'state':obs.state,
                 'prompt':obs.tokenized_prompt
-            }
+            }   
 
             print('wait receive')           
             recv_data = self.receive()
@@ -505,18 +551,19 @@ class Policy(BasePolicy):
         elif stage == ACTION:
             action_result = self.proc_action(recv_data)
 
-        kvcache_result, actions = self._sample_actions(sample_rng_or_pytorch_device, _model.Observation.from_dict(inputs), **self._sample_kwargs,test_obs=None, siglip_result=siglip_result,kvcache_result=kvcache_result,count=self.count)
+        kvcache_result, actions = self._sample_actions(sample_rng_or_pytorch_device, _model.Observation.from_dict(inputs), **self._sample_kwargs)
 
         if stage == ACTION_B:
+            obs = _model.Observation.from_dict(inputs)
+            obs =  _preprocessing.preprocess_observation_pytorch(obs ,train=False)
             obs = {
                 'images':kvcache_result, # actually kv_cache
-                'state':obs.state,
-                'prompt':obs.tokenized_prompt
+                'state':obs.state.cpu().numpy(),
+                'prompt':obs.tokenized_prompt.cpu().numpy()
             }
             self.send(obs)
             recv_data = self.receive()
-            action_result = self.self.proc_action(recv_data)
-
+            action_result = self.proc_action(recv_data)
         outputs = {
             "state": inputs["state"],
             "actions": actions,
@@ -526,8 +573,10 @@ class Policy(BasePolicy):
         if stage == ACTION or stage == ACTION_B:
             print('raw action',outputs["actions"])
             print('cpp action',action_result)
-            np.save("test/py_act.npy",np.array(outputs["actions"]))
+            np.save("test/py_act.npy",np.array(outputs["actions"].detach().cpu().numpy()))
             np.save("test/cpp_act.npy",np.array(action_result))
+            
+            action_result = filter(action_result.squeeze()).unsqueeze(0)
             outputs["actions"] = action_result
 
         # Unbatch and convert to np.ndarray.

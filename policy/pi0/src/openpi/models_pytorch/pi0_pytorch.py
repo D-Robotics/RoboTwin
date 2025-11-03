@@ -13,6 +13,7 @@ import openpi.models_pytorch.preprocessing_pytorch as _preprocessing
 import numpy as np
 import sys
 
+SAVE = False
 
 TEST, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION, ACTION_B= range(10)
 def save_kv_cache(cache_instance, save_dir):
@@ -428,13 +429,8 @@ class PI0Pytorch(nn.Module):
         return F.mse_loss(u_t, v_t, reduction="none")
 
     @torch.no_grad()
-    def sample_actions(self, device, observation, noise=None, num_steps=10, test_obs=None,
-        siglip_result = None,
-        kvcache_result = None,
-        stage = None,
-        count=0) -> Tensor:
+    def sample_actions(self, device, observation, noise=None, num_steps=10) -> Tensor:
         """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
-        print(type(observation.images['right_wrist_0_rgb']))
         bsize = observation.state.shape[0]
         if noise is None:
             actions_shape = (bsize, self.config.action_horizon, self.config.action_dim)
@@ -464,13 +460,15 @@ class PI0Pytorch(nn.Module):
         x_t = noise
         time = torch.tensor(1.0, dtype=torch.float32, device=device)
 
-        npy_save_path = f"/mnt/data/weiyang.hu/openpi/gemma_expert_npy_calibration/{self.save_index}/"
-        print("Saving to:", npy_save_path)
-        save_kv_cache(past_key_values, npy_save_path)
-        _debug_print("state", state)
-        _debug_print("x_t", x_t)
-        np.save(os.path.join(npy_save_path, "x_t.npy"), x_t.detach().cpu().numpy())
-        np.save(os.path.join(npy_save_path, "state.npy"), state.detach().cpu().numpy())
+        if SAVE:
+            npy_save_path = f"wyh/gemma_expert/{self.save_index}/"
+            print("Saving to:", npy_save_path)
+            save_kv_cache(past_key_values, npy_save_path)
+            _debug_print("state", state)
+            _debug_print("x_t", x_t)
+            
+            np.save(os.path.join(npy_save_path, "x_t.npy"), x_t.detach().cpu().numpy())
+            np.save(os.path.join(npy_save_path, "state.npy"), state.detach().cpu().numpy())
         count = 0
         
         while time >= -dt / 2:
@@ -484,16 +482,20 @@ class PI0Pytorch(nn.Module):
             )
 
             # Euler step - use new tensor assignment instead of in-place operation
-            np.save(os.path.join(npy_save_path, f"v_t_time_{count}.npy"), v_t.detach().cpu().numpy())
-            np.save(os.path.join(npy_save_path, f"mask_time_{count}.npy"), mask.detach().cpu().numpy())
-            np.save(os.path.join(npy_save_path, f"posid_time_{count}.npy"), posid.detach().cpu().numpy())
-            # Euler step - use new tensor assignment instead of in-place operation
             x_t = x_t + dt * v_t
-            np.save(os.path.join(npy_save_path, f"x_t_time_{count}.npy"), x_t.detach().cpu().numpy())
+                        
+            if SAVE:
+                np.save(os.path.join(npy_save_path, f"v_t_time_{count}.npy"), v_t.detach().cpu().numpy())
+                np.save(os.path.join(npy_save_path, f"mask_time_{count}.npy"), mask.detach().cpu().numpy())
+                np.save(os.path.join(npy_save_path, f"posid_time_{count}.npy"), posid.detach().cpu().numpy())
+                np.save(os.path.join(npy_save_path, f"x_t_time_{count}.npy"), x_t.detach().cpu().numpy())
             count += 1
             time += dt
         self.save_index += 1
-        return None, x_t
+        inner_stacked = [torch.stack(row, dim=0) for row in past_key_values]  # 每行变成 shape (2, M, N)
+        out = torch.stack(inner_stacked, dim=1)  # shape (2, 18, M, N)
+        kv = out.reshape(1,36,816,-1).detach().cpu().to(torch.float32).numpy()
+        return kv, x_t
 
     def denoise_step(
         self,
