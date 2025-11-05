@@ -30,7 +30,7 @@ BasePolicy: TypeAlias = _base_policy.BasePolicy
 
 TEST, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION, ACTION_B, FULL= range(11)
 
-stage = FULL
+stage = ACTION_B
 
 use_raw = stage not in [OBS,PALIGEMMA_FULL,ACTION,FULL]
 UINT8, FP16, FP32 = range(3)
@@ -571,7 +571,7 @@ class Policy(BasePolicy):
             obs =  _preprocessing.preprocess_observation_pytorch(obs ,train=False)
             obs = {
                 'images':kvcache_result, # actually kv_cache
-                'state':obs.state.cpu().numpy(),
+                'state':obs.state.cpu().numpy().astype(np.float32),
                 'prompt':obs.tokenized_prompt.cpu().numpy()
             }
             self.send(obs)
