@@ -15,7 +15,7 @@ import sys
 
 SAVE = False
 
-TEST, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION, ACTION_B= range(10)
+TEST, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION, FULL, ACTION_B= range(11)
 def save_kv_cache(cache_instance, save_dir):
     """
     保存 KV Cache 到指定目录

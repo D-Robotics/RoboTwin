@@ -30,9 +30,9 @@ BasePolicy: TypeAlias = _base_policy.BasePolicy
 
 TEST, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION, ACTION_B, FULL= range(11)
 
-stage = ACTION_B
+stage = FULL
 
-use_raw = stage not in [OBS,PALIGEMMA_FULL,ACTION]
+use_raw = stage not in [OBS,PALIGEMMA_FULL,ACTION,FULL]
 UINT8, FP16, FP32 = range(3)
 img_out_type = UINT8 if not use_raw else FP16
 
@@ -57,6 +57,10 @@ class MultiChannelButterworth:
         self.x_hist = np.zeros((len(self.b), channels))
         self.y_hist = np.zeros((len(self.a), channels))
 
+    def reset(self):
+        self.x_hist = np.zeros((len(self.b), channels))
+        self.y_hist = np.zeros((len(self.a), channels))
+        
     def filter(self, x):
 
         x = np.asarray(x)
@@ -77,6 +81,7 @@ class MultiChannelButterworth:
         return y
 
 
+
 fs = 50       # 采样率 50Hz
 cutoff = 1    # 截止频率 5Hz
 channels = 14 if stage == FULL else 32 # 三通道数据（如加速度 X/Y/Z）
@@ -89,6 +94,9 @@ def filter(arr):
         filtered[i,:] = filt.filter(arr[i,:])
     return arr
 
+def reset_filter():
+    filt.reset()
+    
 
 import openpi.models_pytorch.preprocessing_pytorch as _preprocessing
 class Policy(BasePolicy):
@@ -212,6 +220,7 @@ class Policy(BasePolicy):
         
         img_dtypes = [msg_pb2.Tensor.UINT8, msg_pb2.Tensor.FLOAT32]
         lang_dtypes = [msg_pb2.Tensor.STRING, msg_pb2.Tensor.INT32]
+        state_dtypes = [msg_pb2.Tensor.FLOAT64, msg_pb2.Tensor.FLOAT32]
 
         # 添加图像Tensor
         if type(observation["images"]) is dict:
@@ -242,9 +251,10 @@ class Policy(BasePolicy):
                
         # 添加状态Tensor
         state = input_msg.states.add()
-        state.dtype = msg_pb2.Tensor.FLOAT32
+        state.dtype = state_dtypes[use_raw]
+        print(observation["state"].dtype)
         state.shape.extend(observation["state"].shape)
-        state.data = observation["state"].astype(np.float32).tobytes()
+        state.data = observation["state"].tobytes()
 
         # 发送消息
         def send_proto_message(sock: socket.socket, msg) -> bool:
@@ -407,12 +417,15 @@ class Policy(BasePolicy):
         return siglip_jax
 
     def proc_action(self,recv_data):
-        paligemma_in = np.array(recv_data["prompt"],dtype=np.float16)
+        if stage == FULL:
+            paligemma_in = np.array(recv_data["prompt"],dtype=np.float64)
+        else:
+            paligemma_in = np.array(recv_data["prompt"],dtype=np.float16)
         if self._is_pytorch_model:
             paligemma_jax = torch.tensor(paligemma_in)
         else:
             paligemma_jax = jax.tree.map(
-                lambda x: jnp.array(x, dtype=jnp.bfloat16),
+                lambda x: jnp.array(x),
                 paligemma_in
             )
         return paligemma_jax
@@ -526,7 +539,7 @@ class Policy(BasePolicy):
             print('wait receive')
             recv_data = self.receive()
         
-        if stage in [PALIGEMMA_FULL,ACTION]:
+        if stage in [PALIGEMMA_FULL,ACTION,FULL]:
             self.send(obs)
   
             obs = _model.Observation.from_dict(inputs)
@@ -548,7 +561,7 @@ class Policy(BasePolicy):
             siglip_result = self.proc_siglip(recv_data)
         elif stage == PALIGEMMA or stage == PALIGEMMA_FULL:
             kvcache_result = self.proc_paligemma(recv_data)
-        elif stage == ACTION:
+        elif stage == ACTION or stage == FULL:
             action_result = self.proc_action(recv_data)
 
         kvcache_result, actions = self._sample_actions(sample_rng_or_pytorch_device, _model.Observation.from_dict(inputs), **self._sample_kwargs)
@@ -571,12 +584,12 @@ class Policy(BasePolicy):
         self.count +=1
 
         if stage == ACTION or stage == ACTION_B:
-            print('raw action',outputs["actions"])
-            print('cpp action',action_result)
+           # print('raw action',outputs["actions"])
+          #  print('cpp action',action_result)
             np.save("test/py_act.npy",np.array(outputs["actions"].detach().cpu().numpy()))
             np.save("test/cpp_act.npy",np.array(action_result))
-            
-            action_result = filter(action_result.squeeze()).unsqueeze(0)
+          #  reset_filter()
+          #  action_result = filter(action_result.squeeze()).unsqueeze(0)
             outputs["actions"] = action_result
 
         # Unbatch and convert to np.ndarray.
@@ -584,9 +597,14 @@ class Policy(BasePolicy):
             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), outputs)
         else:
             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
-            
-        return self._output_transform(outputs)
-        
+
+        outputs = self._output_transform(outputs)
+        if stage == FULL:
+            np.save("test/py_act.npy",np.array(outputs["actions"]))
+            np.save("test/cpp_act.npy",np.array(action_result))
+            outputs["actions"] = action_result.squeeze()
+                
+        return outputs
     @property
     def metadata(self) -> dict[str, Any]:
         return self._metadata
