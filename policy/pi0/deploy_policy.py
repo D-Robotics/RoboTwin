@@ -28,7 +28,7 @@ def get_model(usr_args):
     return PI0(train_config_name, model_name, checkpoint_id, pi0_step)
 
 
-def eval(TASK_ENV, model, observation):
+def eval(TASK_ENV, model, observation, reset=False):
 
     if model.observation_window is None:
         instruction = TASK_ENV.get_instruction()
@@ -39,7 +39,7 @@ def eval(TASK_ENV, model, observation):
 
     # ======== Get Action ========
 
-    actions = model.get_action()[:model.pi0_step]
+    actions = model.get_action(reset)[:model.pi0_step]
 
     for action in actions:
         TASK_ENV.take_action(action)

@@ -30,7 +30,7 @@ BasePolicy: TypeAlias = _base_policy.BasePolicy
 
 TEST, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION, ACTION_B, FULL= range(11)
 
-stage = ACTION_B
+stage = FULL
 
 use_raw = stage not in [OBS,PALIGEMMA_FULL,ACTION,FULL]
 UINT8, FP16, FP32 = range(3)
@@ -92,7 +92,7 @@ def filter(arr):
     filtered = np.zeros_like(arr)
     for i in range(arr.shape[0]):
         filtered[i,:] = filt.filter(arr[i,:])
-    return arr
+    return filtered
 
 def reset_filter():
     filt.reset()
@@ -441,7 +441,7 @@ class Policy(BasePolicy):
         return paligemma_jax
     
     @override
-    def infer(self, obs: dict,noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
+    def infer(self, obs: dict,reset=False, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
         # PATCH
         def dict_equal(d1, d2, atol=1e-6):
             if not (isinstance(d1, dict) and isinstance(d2, dict)):
@@ -602,8 +602,12 @@ class Policy(BasePolicy):
         if stage == FULL:
             np.save("test/py_act.npy",np.array(outputs["actions"]))
             np.save("test/cpp_act.npy",np.array(action_result))
-            outputs["actions"] = action_result.squeeze()
+            if (reset):
+                reset_filter()
+            action_result = filter(action_result.squeeze())
                 
+            outputs["actions"] = action_result.squeeze()
+            
         return outputs
     @property
     def metadata(self) -> dict[str, Any]:

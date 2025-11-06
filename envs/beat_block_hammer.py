@@ -5,7 +5,7 @@ from ._GLOBAL_CONFIGS import *
 import pickle
 
 RND = False
-sample = 0
+sample = 1
 class beat_block_hammer(Base_Task):
     def __init__(self):
         super().__init__()

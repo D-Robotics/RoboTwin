@@ -75,9 +75,9 @@ class PI0:
             "prompt": self.instruction,
         }
 
-    def get_action(self):
+    def get_action(self,reset=False):
         assert self.observation_window is not None, "update observation_window first!"
-        return self.policy.infer(self.observation_window)["actions"]
+        return self.policy.infer(self.observation_window,reset)["actions"]
 
     def reset_obsrvationwindows(self):
         self.instruction = None

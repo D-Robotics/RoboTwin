@@ -35,7 +35,7 @@ parent_directory = os.path.dirname(current_file_path)
 
 import pickle
 RND = False
-sample = 0
+sample = 1
 
 USE_CAUCHY_CAMERA =  False
 HD = False
@@ -372,7 +372,7 @@ def eval_policy(task_name,
         reset_func(model)
         while TASK_ENV.take_action_cnt < TASK_ENV.step_lim:
             observation = TASK_ENV.get_obs()
-            eval_func(TASK_ENV, model, observation)
+            eval_func(TASK_ENV, model, observation, TASK_ENV.take_action_cnt == 0)
             if TASK_ENV.eval_success:
                 succ = True
                 break
