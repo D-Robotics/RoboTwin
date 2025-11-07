@@ -76,8 +76,9 @@ class MultiChannelButterworth:
         y = (self.b[:, None] * self.x_hist).sum(axis=0) - \
             (self.a[1:, None] * self.y_hist[1:]).sum(axis=0)
         y /= self.a[0]
-
+         
         self.y_hist[0] = y
+
         return y
 
 
@@ -189,7 +190,7 @@ class Policy(BasePolicy):
             
         listen()
         
-    def send(self, observation:dict):
+    def send(self, observation:dict, reset=False):
         sock = self.sock_fd
         """发送多模态输入消息"""
         input_msg = msg_pb2.MultiModalInput()
@@ -202,7 +203,7 @@ class Policy(BasePolicy):
             def get_current_time():
                 """获取当前时间(秒和纳秒)"""
                 current = time.time()
-                sec = int(current)
+                sec = int(current)y_hi
                 nsec = int((current - sec) * 1e9)
                 return sec, nsec
 
@@ -210,6 +211,7 @@ class Policy(BasePolicy):
             header.stamp.sec = sec
             header.stamp.nsec = nsec
             header.frame_id = "camera_optical_frame"
+            header.reset = reset
             return header
         
         # 设置Header
@@ -540,7 +542,7 @@ class Policy(BasePolicy):
             recv_data = self.receive()
         
         if stage in [PALIGEMMA_FULL,ACTION,FULL]:
-            self.send(obs)
+            self.send(obs,reset)
   
             obs = _model.Observation.from_dict(inputs)
             obs =  _preprocessing.preprocess_observation_pytorch(obs ,train=False)
@@ -602,9 +604,9 @@ class Policy(BasePolicy):
         if stage == FULL:
             np.save("test/py_act.npy",np.array(outputs["actions"]))
             np.save("test/cpp_act.npy",np.array(action_result))
-            if (reset):
-                reset_filter()
-            action_result = filter(action_result.squeeze())
+          #  if (reset):
+          #      reset_filter()
+          #  action_result = filter(action_result.squeeze())
                 
             outputs["actions"] = action_result.squeeze()
             

@@ -35,7 +35,7 @@ parent_directory = os.path.dirname(current_file_path)
 
 import pickle
 RND = False
-sample = 1
+sample = 0
 
 USE_CAUCHY_CAMERA =  False
 HD = False
