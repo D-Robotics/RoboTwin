@@ -12,6 +12,7 @@ from openpi.training import checkpoints as _checkpoints
 from openpi.training import config as _config
 import openpi.transforms as transforms
 
+CPP = True
 
 def create_trained_policy(
     train_config: _config.TrainConfig,
@@ -50,7 +51,10 @@ def create_trained_policy(
     weight_path = os.path.join(checkpoint_dir, "model.safetensors")
     is_pytorch = os.path.exists(weight_path)
 
-    if is_pytorch:
+    if CPP:
+        print(f"No model loaded!")
+        model = None
+    elif is_pytorch:
         print(f"Loading model from {weight_path}...")
         model = train_config.model.load_pytorch(train_config, weight_path)
         model.paligemma_with_expert.to_bfloat16_for_selected_params("bfloat16")

@@ -112,7 +112,7 @@ class Policy(BasePolicy):
         sample_kwargs: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
         pytorch_device: str = "cpu",
-        is_pytorch: bool = False
+        is_pytorch: bool = False,
     ):
         self._model = model
         self._input_transform = _transforms.compose(transforms)
@@ -121,14 +121,16 @@ class Policy(BasePolicy):
         self._metadata = metadata or {}
         self._is_pytorch_model = is_pytorch
         self._pytorch_device = pytorch_device
-        if self._is_pytorch_model:
-            self._model = self._model.to(pytorch_device)
-            self._model.eval()
-            self._sample_actions = model.sample_actions
-        else:
-            # JAX model setup
-            self._sample_actions = nnx_utils.module_jit(model.sample_actions)
-            self._rng = rng or jax.random.key(0)
+        print(111)
+        if model is not None:
+            if self._is_pytorch_model:
+                self._model = self._model.to(pytorch_device)
+                self._model.eval()
+                self._sample_actions = model.sample_actions
+            else:
+                # JAX model setup
+                self._sample_actions = nnx_utils.module_jit(model.sample_actions)
+                self._rng = rng or jax.random.key(0)
 
         self.listen_fd = None
         self.sock_fd = None
@@ -203,7 +205,7 @@ class Policy(BasePolicy):
             def get_current_time():
                 """获取当前时间(秒和纳秒)"""
                 current = time.time()
-                sec = int(current)y_hi
+                sec = int(current)
                 nsec = int((current - sec) * 1e9)
                 return sec, nsec
 
@@ -485,6 +487,13 @@ class Policy(BasePolicy):
         if stage != SKIP:
             self.connect()
 
+        if self._model is None:
+            self.send(obs)
+            recv_data = self.receive()
+            action_result = self.proc_action(recv_data)
+            outputs = {"actions":action_result.squeeze()}
+            return outputs
+            
         siglip_result = None
         kvcache_result = None
         action_result = None

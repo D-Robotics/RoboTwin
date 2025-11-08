@@ -258,7 +258,6 @@ def eval_policy(task_name,
             }   
             args["left_embodiment_config"]["static_camera_list"].append(cauchy_obs_camera1)
             args["left_embodiment_config"]["static_camera_list"].append(cauchy_obs_camera2)
-
         if expert_check:
             try:
                 TASK_ENV.setup_demo(now_ep_num=now_id, seed=now_seed, is_test=True, **args)
@@ -282,7 +281,6 @@ def eval_policy(task_name,
                 args["render_freq"] = render_freq
                 print("error occurs !")
                 continue
-
         if (not expert_check) or (TASK_ENV.plan_success and TASK_ENV.check_success()):
             succ_seed += 1
             suc_test_seed_list.append(now_seed)
@@ -307,7 +305,6 @@ def eval_policy(task_name,
             print(f'load {now_id}')
             
         TASK_ENV.set_instruction(instruction=instruction)  # set language instruction
-
         if USE_VIDEO:
             if TASK_ENV.eval_video_path is not None:
                 ffmpeg = subprocess.Popen(
@@ -367,7 +364,7 @@ def eval_policy(task_name,
                 TASK_ENV._set_eval_video_ffmpeg(ffmpeg, ffmpeg_cauchy)
         else:
             TASK_ENV._set_eval_video_ffmpeg()
-
+        
         succ = False
         reset_func(model)
         while TASK_ENV.take_action_cnt < TASK_ENV.step_lim:
