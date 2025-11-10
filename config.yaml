@@ -1,0 +1,9 @@
+sample: 2              # 样本索引
+rnd: false             # 是否启用随机采样，false 表示使用sample的样本
+stage: 10              # 测试阶段 TEST=0, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION, ACTION_B, FULL
+torch_model: "/mnt/data/yanjie.shen/RoboTwin/policy/pi0/torch_model/pi0_aloha_pytorch_hammer_demo_clean_1031"
+                       # PyTorch 模型路径
+use_cpp: true           # 是否仅使用端侧推理，仿真侧不执行推理（stage为FULL时可选）
+use_video: true         # 是否保存视频
+cauchy: false           # 是否cauchy camera
+hd: false               # 是否保存高清视频

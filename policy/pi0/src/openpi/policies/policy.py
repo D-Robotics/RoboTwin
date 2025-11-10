@@ -30,10 +30,11 @@ BasePolicy: TypeAlias = _base_policy.BasePolicy
 
 TEST, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION, ACTION_B, FULL= range(11)
 
-import json
-json_path = "config.json" 
-with open(json_path, 'r', encoding='utf-8') as f:
-    data = json.load(f)
+import yaml
+
+yaml_path = "config.yaml"  # YAML 文件路径
+with open(yaml_path, 'r', encoding='utf-8') as f:
+    data = yaml.safe_load(f)  # 使用 safe_load 避免执行任意代码
 stage = data['stage']
 
 use_raw = stage not in [OBS,PALIGEMMA_FULL,ACTION,FULL]

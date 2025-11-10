@@ -4,11 +4,13 @@ import sapien
 from ._GLOBAL_CONFIGS import *
 import pickle
 
-import json
-json_path = "config.json" 
-with open(json_path, 'r', encoding='utf-8') as f:
-    data = json.load(f)
-RND =data['rnd']
+import yaml
+
+yaml_path = "config.yaml"  # YAML 文件路径
+with open(yaml_path, 'r', encoding='utf-8') as f:
+    data = yaml.safe_load(f)  # 使用 safe_load 避免执行任意代码
+
+RND = data['rnd']
 sample = data['sample']
 
 class beat_block_hammer(Base_Task):
