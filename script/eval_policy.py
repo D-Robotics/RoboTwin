@@ -34,12 +34,17 @@ current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
 
 import pickle
-RND = False
-sample = 0
+import json
+json_path = "config.json" 
+with open(json_path, 'r', encoding='utf-8') as f:
+    data = json.load(f)
+RND =data['rnd']
+sample = data['sample']
 
-USE_CAUCHY_CAMERA =  False
-HD = False
-USE_VIDEO = True
+USE_CAUCHY_CAMERA =  data['cauchy']
+HD = data['hd']
+USE_VIDEO = data['use_video']
+
 
 def class_decorator(task_name):
     envs_module = importlib.import_module(f"envs.{task_name}")

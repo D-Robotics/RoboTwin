@@ -12,7 +12,11 @@ from openpi.training import checkpoints as _checkpoints
 from openpi.training import config as _config
 import openpi.transforms as transforms
 
-CPP = True
+import json
+json_path = "config.json" 
+with open(json_path, 'r', encoding='utf-8') as f:
+    data = json.load(f)
+USE_CPP = data['use_cpp']
 
 def create_trained_policy(
     train_config: _config.TrainConfig,
@@ -51,7 +55,7 @@ def create_trained_policy(
     weight_path = os.path.join(checkpoint_dir, "model.safetensors")
     is_pytorch = os.path.exists(weight_path)
 
-    if CPP:
+    if USE_CPP:
         print(f"No model loaded!")
         model = None
     elif is_pytorch:

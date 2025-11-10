@@ -27,6 +27,12 @@ import os
 #os.environ["TORCH_LOGS"] = "off"
 #os.environ["PYTORCH_TRTON_DISABLE"] = "1"
 
+import json
+json_path = "config.json" 
+with open(json_path, 'r', encoding='utf-8') as f:
+    data = json.load(f)
+torch_model = data['torch_model']
+
 class PI0:
     def __init__(self, train_config_name, model_name, checkpoint_id, pi0_step):
         self.train_config_name = train_config_name
@@ -37,7 +43,7 @@ class PI0:
         self.policy = _policy_config.create_trained_policy(
             config,
         #    f"policy/pi0/checkpoints/{self.train_config_name}/{self.model_name}/{self.checkpoint_id}",
-            "/mnt/data/yanjie.shen/RoboTwin/policy/pi0/torch_model/pi0_aloha_pytorch_hammer_demo_clean_1031",
+            torch_model,
             robotwin_repo_id=model_name)
         print("loading model success!")
         self.img_size = (224, 224)

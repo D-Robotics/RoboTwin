@@ -4,8 +4,13 @@ import sapien
 from ._GLOBAL_CONFIGS import *
 import pickle
 
-RND = False
-sample = 0
+import json
+json_path = "config.json" 
+with open(json_path, 'r', encoding='utf-8') as f:
+    data = json.load(f)
+RND =data['rnd']
+sample = data['sample']
+
 class beat_block_hammer(Base_Task):
     def __init__(self):
         super().__init__()

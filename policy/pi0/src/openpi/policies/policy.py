@@ -30,7 +30,11 @@ BasePolicy: TypeAlias = _base_policy.BasePolicy
 
 TEST, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION, ACTION_B, FULL= range(11)
 
-stage = FULL
+import json
+json_path = "config.json" 
+with open(json_path, 'r', encoding='utf-8') as f:
+    data = json.load(f)
+stage = data['stage']
 
 use_raw = stage not in [OBS,PALIGEMMA_FULL,ACTION,FULL]
 UINT8, FP16, FP32 = range(3)
@@ -121,7 +125,6 @@ class Policy(BasePolicy):
         self._metadata = metadata or {}
         self._is_pytorch_model = is_pytorch
         self._pytorch_device = pytorch_device
-        print(111)
         if model is not None:
             if self._is_pytorch_model:
                 self._model = self._model.to(pytorch_device)
@@ -492,6 +495,7 @@ class Policy(BasePolicy):
             recv_data = self.receive()
             action_result = self.proc_action(recv_data)
             outputs = {"actions":action_result.squeeze()}
+            np.save("test/cpp_act.npy",np.array(action_result))
             return outputs
             
         siglip_result = None
