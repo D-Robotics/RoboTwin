@@ -36,6 +36,7 @@ yaml_path = "config.yaml"  # YAML 文件路径
 with open(yaml_path, 'r', encoding='utf-8') as f:
     data = yaml.safe_load(f)  # 使用 safe_load 避免执行任意代码
 stage = data['stage']
+port = data['port']
 
 use_raw = stage not in [OBS,PALIGEMMA_FULL,ACTION,FULL]
 UINT8, FP16, FP32 = range(3)
@@ -167,7 +168,7 @@ class Policy(BasePolicy):
                 return
             
             # 2. 绑定端口（对应 C++ 的 bind()，监听 8888 端口）
-            server_addr = ("0.0.0.0", 8888)  # 0.0.0.0 等价于 C++ 的 INADDR_ANY（监听所有网卡）
+            server_addr = ("0.0.0.0", port)  # 0.0.0.0 等价于 C++ 的 INADDR_ANY（监听所有网卡）
             try:
                 self.listen_fd.bind(server_addr)
             except OSError as e:
@@ -178,7 +179,7 @@ class Policy(BasePolicy):
             # 3. 开始监听连接（对应 C++ 的 listen()，backlog=5）
             try:
                 self.listen_fd.listen(5)  # backlog：等待队列最大长度
-                print("服务器启动成功，等待客户端连接...（端口：8888）")
+                print(f"服务器启动成功，等待客户端连接...（端口：{port}）")
             except OSError as e:
                 print(f"监听失败：{str(e)}")
                 self.listen_fd.close()
@@ -492,7 +493,7 @@ class Policy(BasePolicy):
             self.connect()
 
         if self._model is None:
-            self.send(obs)
+            self.send(obs,reset)
             recv_data = self.receive()
             action_result = self.proc_action(recv_data)
             outputs = {"actions":action_result.squeeze()}

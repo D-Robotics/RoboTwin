@@ -5,5 +5,6 @@ torch_model: "/mnt/data/yanjie.shen/RoboTwin/policy/pi0/torch_model/pi0_aloha_py
                        # PyTorch 模型路径
 use_cpp: true           # 是否仅使用端侧推理，仿真侧不执行推理（stage为FULL时可选）
 use_video: true         # 是否保存视频
-cauchy: false           # 是否cauchy camera
-hd: false               # 是否保存高清视频
+cauchy: true           # 是否cauchy camera，在_camera_config.yaml调整分辨率，在eval_policy.py中调整角度
+hd: false             # 是否保存高清视频（640*480）
+port: 8888             # 监听socket连接的端口

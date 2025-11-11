@@ -13,6 +13,10 @@ with open(yaml_path, 'r', encoding='utf-8') as f:
 RND = data['rnd']
 sample = data['sample']
 
+import os
+data_path = f'./eval_data/{sample}'
+os.makedirs(data_path, exist_ok=True)
+
 class beat_block_hammer(Base_Task):
     def __init__(self):
         super().__init__()

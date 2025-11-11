@@ -256,12 +256,14 @@ def eval_policy(task_name,
                 'left': [-1, 0, 0]
                 }
             cauchy_obs_camera2 = {
-                'name': 'cauchy_obs_camera2', 
-                'type': 'Cauchy_OBS', 
-                'position': [0.1, -0.45, 1.35],   # 微右移
-                'forward': [-0.6, 0, -0.1],       # 左方偏下
-                'left': [0, -1, 0]                # 左边方向
-            }   
+                'name': 'cauchy_obs_camera2',
+                'type': 'Cauchy_OBS',
+                'position': [-0.6, -0.15, 1.15],  # 相机位置不变
+                'forward': [0.6, 0, -0.8],       # z 分量更负 → 向下更多
+                'left': [0, 1, 0]                # 保持 left 向量
+            }
+
+
             args["left_embodiment_config"]["static_camera_list"].append(cauchy_obs_camera1)
             args["left_embodiment_config"]["static_camera_list"].append(cauchy_obs_camera2)
         if expert_check:
