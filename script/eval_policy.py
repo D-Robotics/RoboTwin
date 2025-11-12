@@ -40,10 +40,10 @@ yaml_path = "config.yaml"  # YAML 文件路径
 with open(yaml_path, 'r', encoding='utf-8') as f:
     data = yaml.safe_load(f)  # 使用 safe_load 避免执行任意代码
 RND =data['rnd']
-sample = data['sample']
+SAMPLE = data['sample']
 
 USE_CAUCHY_CAMERA =  data['cauchy']
-HD = data['hd']
+CAT_DIM = data['cat_dim']
 USE_VIDEO = data['use_video']
 
 
@@ -149,9 +149,11 @@ def main(usr_args):
     if args["eval_video_log"]:
         video_save_dir = save_dir
         if USE_CAUCHY_CAMERA:
-            video_size = str(320) + "x" + str(240*2)
-            if HD:
-                video_size = str(640) + "x" + str(480*2)
+            camera_config = get_camera_config("Cauchy_OBS")
+            if CAT_DIM == 0:
+                video_size = str(camera_config["w"]) + "x" + str(camera_config["h"]*2)
+            else:
+                video_size = str(camera_config["w"]*2) + "x" + str(camera_config["h"])
         else:
             camera_config = get_camera_config(args["camera"]["head_camera_type"])
             video_size = str(camera_config["w"]) + "x" + str(camera_config["h"])
@@ -258,7 +260,7 @@ def eval_policy(task_name,
             cauchy_obs_camera2 = {
                 'name': 'cauchy_obs_camera2',
                 'type': 'Cauchy_OBS',
-                'position': [-0.6, -0.15, 1.15],  # 相机位置不变
+                'position': [-0.5, -0.05, 1.15],  # 相机位置不变
                 'forward': [0.6, 0, -0.8],       # z 分量更负 → 向下更多
                 'left': [0, 1, 0]                # 保持 left 向量
             }
@@ -304,11 +306,11 @@ def eval_policy(task_name,
         results = generate_episode_descriptions(args["task_name"], episode_info_list, test_num)
         if RND:
             instruction = np.random.choice(results[0][instruction_type])
-            with open(f'./eval_data/{sample}/{now_id}_inst.pkl','wb') as f:
+            with open(f'./eval_data/{SAMPLE}/{now_id}_inst.pkl','wb') as f:
                 pickle.dump(instruction,f)
             print(f'inst {now_id}')
         else:
-            with open(f'./eval_data/{sample}/{now_id}_inst.pkl','rb') as f:
+            with open(f'./eval_data/{SAMPLE}/{now_id}_inst.pkl','rb') as f:
                 instruction = pickle.load(f)
             print(f'load {now_id}')
             

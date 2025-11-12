@@ -11,10 +11,10 @@ with open(yaml_path, 'r', encoding='utf-8') as f:
     data = yaml.safe_load(f)  # 使用 safe_load 避免执行任意代码
 
 RND = data['rnd']
-sample = data['sample']
+SAMPLE = data['sample']
 
 import os
-data_path = f'./eval_data/{sample}'
+data_path = f'./eval_data/{SAMPLE}'
 os.makedirs(data_path, exist_ok=True)
 
 class beat_block_hammer(Base_Task):
@@ -52,11 +52,11 @@ class beat_block_hammer(Base_Task):
                     rotate_rand=True,
                     rotate_lim=[0, 0, 0.5],
                 )
-            with open(f'./eval_data/{sample}/{self.count}_pos.pkl','wb') as f:
+            with open(f'./eval_data/{SAMPLE}/{self.count}_pos.pkl','wb') as f:
                 pickle.dump(block_pose,f)
             print(f'generate {self.count}')
         else:
-            with open(f'./eval_data/{sample}/{self.count}_pos.pkl','rb') as f:
+            with open(f'./eval_data/{SAMPLE}/{self.count}_pos.pkl','rb') as f:
                 block_pose = pickle.load(f)
             print(f'load {self.count}')
 

@@ -24,6 +24,7 @@ import trimesh
 import imageio
 import glob
 
+import matplotlib.pyplot as plt
 
 from ._GLOBAL_CONFIGS import *
 
@@ -32,7 +33,24 @@ from typing import Optional, Literal
 current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
 
+import yaml
 
+yaml_path = "config.yaml"  # YAML 文件路径
+with open(yaml_path, 'r', encoding='utf-8') as f:
+    data = yaml.safe_load(f)  # 使用 safe_load 避免执行任意代码
+CAT_DIM =data['cat_dim']
+FRESH = data['fresh']
+
+plt.ion()
+fig, ax = plt.subplots()
+ax.axis('off')
+
+def show(img):
+    ax.clear()
+    ax.imshow(img)
+    plt.draw()
+    plt.pause(FRESH)
+            
 class Base_Task(gym.Env):
 
     def __init__(self):
@@ -1495,10 +1513,14 @@ class Base_Task(gym.Env):
                 concatenated_rgb = np.ascontiguousarray(np.concatenate([
                                 self.now_obs["observation"]["cauchy_obs_camera1"]["rgb"], 
                                 self.now_obs["observation"]["cauchy_obs_camera2"]["rgb"]],
-                                axis=0))  
+                                axis=CAT_DIM))  
+                img = concatenated_rgb
                 self.eval_video_ffmpeg_cauchy.stdin.write(concatenated_rgb.tobytes())
             elif self.eval_video_ffmpeg:
                 self.eval_video_ffmpeg.stdin.write(self.now_obs["observation"]["head_camera"]["rgb"].tobytes())
+                img = self.now_obs["observation"]["head_camera"]["rgb"].tobytes()   
+            show(img)
+       #     plt.imsave("Robo.png",img)
         self.take_action_cnt += 1
         print(f"step: \033[92m{self.take_action_cnt} / {self.step_lim}\033[0m", end="\r")
 
