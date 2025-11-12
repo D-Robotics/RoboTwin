@@ -310,11 +310,11 @@ def eval_policy(task_name,
         results = generate_episode_descriptions(args["task_name"], episode_info_list, test_num)
         if RND:
             instruction = np.random.choice(results[0][instruction_type])
-            with open(f'./eval_data/{SAMPLE}/{now_id}_inst.pkl','wb') as f:
+            with open(f'./eval_data/{task_name}/{SAMPLE}/{now_id}_inst.pkl','wb') as f:
                 pickle.dump(instruction,f)
             print(f'inst {now_id}')
         else:
-            with open(f'./eval_data/{SAMPLE}/{now_id}_inst.pkl','rb') as f:
+            with open(f'./eval_data/{task_name}{SAMPLE}/{now_id}_inst.pkl','rb') as f:
                 instruction = pickle.load(f)
             print(f'load {now_id}')
             

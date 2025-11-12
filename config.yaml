@@ -1,11 +1,11 @@
 sample: 4              # 样本索引
 rnd: true             # 是否启用随机采样，false 表示使用sample的样本
 stage: 10              # 测试阶段 TEST=0, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION, ACTION_B, FULL
-torch_model: "/mnt/data/yanjie.shen/RoboTwin/policy/pi0/torch_model/pi0_aloha_pytorch_hammer_demo_clean_1031"
+torch_model: "/mnt/data/yanjie.shen/RoboTwin/policy/pi0/checkpoints/pi0_base_aloha_robotwin_full/demo_clean/30000"
                        # PyTorch 模型路径
 use_cpp: true         # 是否仅使用端侧推理，仿真侧不执行推理（stage为FULL时可选）
 use_video: true         # 是否保存视频
 cauchy: false           # 是否cauchy camera，在_camera_config.yaml调整分辨率，在eval_policy.py中调整角度
 cat_dim: 0               # 拼接维度：0 竖拼，1 横拼
-fresh: 0              # 图像刷新时间
+fresh: 0.1              # 图像刷新时间，0为不显示图像
 port: 8888             # 监听socket连接的端口

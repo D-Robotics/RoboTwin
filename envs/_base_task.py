@@ -37,7 +37,6 @@ import yaml
 
 plt.ion()
 fig, ax = plt.subplots()
-ax.axis('off')
 
             
 class Base_Task(gym.Env):
@@ -48,6 +47,7 @@ class Base_Task(gym.Env):
     # show img
     def show(self,img):
         ax.clear()
+        ax.axis('off')
         ax.imshow(img)
         plt.draw()
         plt.pause(self.fresh)
