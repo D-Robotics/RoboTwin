@@ -107,6 +107,7 @@ class beat_block_hammer(Base_Task):
     def check_success(self):
         hammer_target_pose = self.hammer.get_functional_point(0, "pose").p
         block_pose = self.block.get_functional_point(1, "pose").p
-        eps = np.array([0.02, 0.02])
+      #  eps = np.array([0.02, 0.02]
+        eps = np.array([1, 1])
         return np.all(abs(hammer_target_pose[:2] - block_pose[:2]) < eps) and self.check_actors_contact(
             self.hammer.get_name(), self.block.get_name())

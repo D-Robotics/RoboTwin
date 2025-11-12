@@ -1518,7 +1518,7 @@ class Base_Task(gym.Env):
                 self.eval_video_ffmpeg_cauchy.stdin.write(concatenated_rgb.tobytes())
             elif self.eval_video_ffmpeg:
                 self.eval_video_ffmpeg.stdin.write(self.now_obs["observation"]["head_camera"]["rgb"].tobytes())
-                img = self.now_obs["observation"]["head_camera"]["rgb"].tobytes()   
+                img = self.now_obs["observation"]["head_camera"]["rgb"]  
             show(img)
        #     plt.imsave("Robo.png",img)
         self.take_action_cnt += 1
