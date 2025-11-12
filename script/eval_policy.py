@@ -295,8 +295,7 @@ def eval_policy(task_name,
                 print(e)
                 print("error occurs !")
                 continue
-            
-        print(000)
+
         if (not expert_check) or (TASK_ENV.plan_success and TASK_ENV.check_success()):
             succ_seed += 1
             suc_test_seed_list.append(now_seed)

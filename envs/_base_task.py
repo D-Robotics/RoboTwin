@@ -71,19 +71,6 @@ class Base_Task(gym.Env):
         np.random.seed(kwags.get("seed", 0))
         torch.manual_seed(kwags.get("seed", 0))
         # random.seed(kwags.get('seed', 0))
-              
-        # video config
-        data = kwags.get('cfg')
-        self.cat_dim =data['cat_dim']
-        self.fresh = data['fresh']
-        if self.fresh == 0:
-            self.fresh = 0.00000001
-
-        # dataset config
-        self.rnd = data['rnd']
-        sample = data['sample']
-        self.data_path = f'./eval_data/{sample}'
-        os.makedirs(self.data_path, exist_ok=True)       
 
         self.FRAME_IDX = 0
         self.task_name = kwags.get("task_name")
@@ -96,6 +83,17 @@ class Base_Task(gym.Env):
         self.eval_mode = kwags.get("eval_mode", False)
 
         self.need_topp = True  # TODO
+        
+        # video config
+        data = kwags.get('cfg')
+        self.cat_dim =data['cat_dim']
+        self.fresh = data['fresh']
+
+        # dataset config
+        self.rnd = data['rnd']
+        sample = data['sample']
+        self.data_path = f'./eval_data/{self.task_name}/{sample}'
+        os.makedirs(self.data_path, exist_ok=True)     
 
         # Random
         random_setting = kwags.get("domain_randomization")
@@ -1525,7 +1523,8 @@ class Base_Task(gym.Env):
             elif self.eval_video_ffmpeg:
                 self.eval_video_ffmpeg.stdin.write(self.now_obs["observation"]["head_camera"]["rgb"].tobytes())
                 img = self.now_obs["observation"]["head_camera"]["rgb"]  
-            self.show(img)
+            if self.fresh:
+                self.show(img)
        #     plt.imsave("Robo.png",img)
         self.take_action_cnt += 1
         print(f"step: \033[92m{self.take_action_cnt} / {self.step_lim}\033[0m", end="\r")

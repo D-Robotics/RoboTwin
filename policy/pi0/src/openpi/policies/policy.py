@@ -251,7 +251,6 @@ class Policy(BasePolicy):
         # 添加状态Tensor
         state = input_msg.states.add()
         state.dtype = state_dtypes[self.use_raw]
-        print(observation["state"].dtype)
         state.shape.extend(observation["state"].shape)
         state.data = observation["state"].tobytes()
 
