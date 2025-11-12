@@ -35,27 +35,22 @@ parent_directory = os.path.dirname(current_file_path)
 
 import yaml
 
-yaml_path = "config.yaml"  # YAML 文件路径
-with open(yaml_path, 'r', encoding='utf-8') as f:
-    data = yaml.safe_load(f)  # 使用 safe_load 避免执行任意代码
-CAT_DIM =data['cat_dim']
-FRESH = data['fresh']
-
 plt.ion()
 fig, ax = plt.subplots()
 ax.axis('off')
 
-def show(img):
-    ax.clear()
-    ax.imshow(img)
-    plt.draw()
-    plt.pause(FRESH)
             
 class Base_Task(gym.Env):
 
     def __init__(self):
         pass
-
+    
+    # show img
+    def show(self,img):
+        ax.clear()
+        ax.imshow(img)
+        plt.draw()
+        plt.pause(self.fresh)
     # =========================================================== Init Task Env ===========================================================
     def _init_task_env_(self, table_xy_bias=[0, 0], table_height_bias=0, **kwags):
         """
@@ -76,6 +71,19 @@ class Base_Task(gym.Env):
         np.random.seed(kwags.get("seed", 0))
         torch.manual_seed(kwags.get("seed", 0))
         # random.seed(kwags.get('seed', 0))
+              
+        # video config
+        data = kwags.get('cfg')
+        self.cat_dim =data['cat_dim']
+        self.fresh = data['fresh']
+        if self.fresh == 0:
+            self.fresh = 0.00000001
+
+        # dataset config
+        self.rnd = data['rnd']
+        sample = data['sample']
+        self.data_path = f'./eval_data/{sample}'
+        os.makedirs(self.data_path, exist_ok=True)       
 
         self.FRAME_IDX = 0
         self.task_name = kwags.get("task_name")
@@ -112,7 +120,6 @@ class Base_Task(gym.Env):
         self.raw_head_pcl = None
         self.real_head_pcl = None
         self.real_head_pcl_color = None
-
         self.now_obs = {}
         self.take_action_cnt = 0
         self.eval_video_path = kwags.get("eval_video_save_dir", None)
@@ -134,7 +141,6 @@ class Base_Task(gym.Env):
         self.right_cnt = 0
 
         self.instruction = None  # for Eval
-
         self.create_table_and_wall(table_xy_bias=table_xy_bias, table_height=0.74)
         self.load_robot(**kwags)
         self.load_camera(**kwags)
@@ -1513,13 +1519,13 @@ class Base_Task(gym.Env):
                 concatenated_rgb = np.ascontiguousarray(np.concatenate([
                                 self.now_obs["observation"]["cauchy_obs_camera1"]["rgb"], 
                                 self.now_obs["observation"]["cauchy_obs_camera2"]["rgb"]],
-                                axis=CAT_DIM))  
+                                axis=self.cat_dim))  
                 img = concatenated_rgb
                 self.eval_video_ffmpeg_cauchy.stdin.write(concatenated_rgb.tobytes())
             elif self.eval_video_ffmpeg:
                 self.eval_video_ffmpeg.stdin.write(self.now_obs["observation"]["head_camera"]["rgb"].tobytes())
                 img = self.now_obs["observation"]["head_camera"]["rgb"]  
-            show(img)
+            self.show(img)
        #     plt.imsave("Robo.png",img)
         self.take_action_cnt += 1
         print(f"step: \033[92m{self.take_action_cnt} / {self.step_lim}\033[0m", end="\r")

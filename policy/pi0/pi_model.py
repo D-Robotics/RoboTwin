@@ -27,15 +27,8 @@ import os
 #os.environ["TORCH_LOGS"] = "off"
 #os.environ["PYTORCH_TRTON_DISABLE"] = "1"
 
-import yaml
-
-yaml_path = "config.yaml"  # YAML 文件路径
-with open(yaml_path, 'r', encoding='utf-8') as f:
-    data = yaml.safe_load(f)  # 使用 safe_load 避免执行任意代码
-torch_model = data['torch_model']
-
 class PI0:
-    def __init__(self, train_config_name, model_name, checkpoint_id, pi0_step):
+    def __init__(self, train_config_name, model_name, checkpoint_id, pi0_step, cfg):
         self.train_config_name = train_config_name
         self.model_name = model_name
         self.checkpoint_id = checkpoint_id
@@ -44,8 +37,9 @@ class PI0:
         self.policy = _policy_config.create_trained_policy(
             config,
         #    f"policy/pi0/checkpoints/{self.train_config_name}/{self.model_name}/{self.checkpoint_id}",
-            torch_model,
-            robotwin_repo_id=model_name)
+            cfg['torch_model'],
+            robotwin_repo_id=model_name,
+            cfg = cfg)
         print("loading model success!")
         self.img_size = (224, 224)
         self.observation_window = None

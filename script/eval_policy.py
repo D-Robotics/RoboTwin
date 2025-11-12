@@ -191,6 +191,7 @@ def main(usr_args):
     test_num = 100
     topk = 1
 
+    usr_args["cfg"]= data
     model = get_model(usr_args)
     st_seed, suc_num, suc_list = eval_policy(task_name,
                                    TASK_ENV,
@@ -243,7 +244,9 @@ def eval_policy(task_name,
     task_total_reward = 0
     clear_cache_freq = args["clear_cache_freq"]
     args["eval_mode"] = True
-
+    
+    # config.yaml
+    args['cfg'] = data
     suc_list = []
     while succ_seed < test_num:
         render_freq = args["render_freq"]
@@ -289,8 +292,11 @@ def eval_policy(task_name,
                 TASK_ENV.close_env()
                 now_seed += 1
                 args["render_freq"] = render_freq
+                print(e)
                 print("error occurs !")
                 continue
+            
+        print(000)
         if (not expert_check) or (TASK_ENV.plan_success and TASK_ENV.check_success()):
             succ_seed += 1
             suc_test_seed_list.append(now_seed)
@@ -300,7 +306,6 @@ def eval_policy(task_name,
             continue
 
         args["render_freq"] = render_freq
-
         TASK_ENV.setup_demo(now_ep_num=now_id, seed=now_seed, is_test=True, **args)
         episode_info_list = [episode_info["info"]]
         results = generate_episode_descriptions(args["task_name"], episode_info_list, test_num)

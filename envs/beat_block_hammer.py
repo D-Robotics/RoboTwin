@@ -4,19 +4,6 @@ import sapien
 from ._GLOBAL_CONFIGS import *
 import pickle
 
-import yaml
-
-yaml_path = "config.yaml"  # YAML 文件路径
-with open(yaml_path, 'r', encoding='utf-8') as f:
-    data = yaml.safe_load(f)  # 使用 safe_load 避免执行任意代码
-
-RND = data['rnd']
-SAMPLE = data['sample']
-
-import os
-data_path = f'./eval_data/{SAMPLE}'
-os.makedirs(data_path, exist_ok=True)
-
 class beat_block_hammer(Base_Task):
     def __init__(self):
         super().__init__()
@@ -34,7 +21,7 @@ class beat_block_hammer(Base_Task):
             convex=True,
             model_id=0,
         )
-        if RND:
+        if self.rnd:
             block_pose = rand_pose(
                 xlim=[-0.25, 0.25],
                 ylim=[-0.05, 0.15],
@@ -52,11 +39,11 @@ class beat_block_hammer(Base_Task):
                     rotate_rand=True,
                     rotate_lim=[0, 0, 0.5],
                 )
-            with open(f'./eval_data/{SAMPLE}/{self.count}_pos.pkl','wb') as f:
+            with open(f'{self.data_path}/{self.count}_pos.pkl','wb') as f:
                 pickle.dump(block_pose,f)
             print(f'generate {self.count}')
         else:
-            with open(f'./eval_data/{SAMPLE}/{self.count}_pos.pkl','rb') as f:
+            with open(f'{self.data_path}/{self.count}_pos.pkl','rb') as f:
                 block_pose = pickle.load(f)
             print(f'load {self.count}')
 

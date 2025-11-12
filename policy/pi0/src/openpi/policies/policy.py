@@ -16,6 +16,7 @@ from openpi import transforms as _transforms
 from openpi.models import model as _model
 from openpi.shared import array_typing as at
 from openpi.shared import nnx_utils
+import openpi.models_pytorch.preprocessing_pytorch as _preprocessing
 
 import socket
 import time
@@ -30,19 +31,7 @@ BasePolicy: TypeAlias = _base_policy.BasePolicy
 
 TEST, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION, ACTION_B, FULL= range(11)
 
-import yaml
-
-yaml_path = "config.yaml"  # YAML 文件路径
-with open(yaml_path, 'r', encoding='utf-8') as f:
-    data = yaml.safe_load(f)  # 使用 safe_load 避免执行任意代码
-stage = data['stage']
-port = data['port']
-
-use_raw = stage not in [OBS,PALIGEMMA_FULL,ACTION,FULL]
-UINT8, FP16, FP32 = range(3)
-img_out_type = UINT8 if not use_raw else FP16
-
-# test stage
+# test self.stage
 # SKIP: Robotwin raw procedure
 # TEST: Send local input and receive SIGLIP result
 # OBS: Send and receive raw obs to test mismatch
@@ -86,26 +75,6 @@ class MultiChannelButterworth:
         self.y_hist[0] = y
 
         return y
-
-
-
-fs = 50       # 采样率 50Hz
-cutoff = 1    # 截止频率 5Hz
-channels = 14 if stage == FULL else 32 # 三通道数据（如加速度 X/Y/Z）
-
-filt = MultiChannelButterworth(cutoff, fs, channels)
-
-def filter(arr):
-    filtered = np.zeros_like(arr)
-    for i in range(arr.shape[0]):
-        filtered[i,:] = filt.filter(arr[i,:])
-    return filtered
-
-def reset_filter():
-    filt.reset()
-    
-
-import openpi.models_pytorch.preprocessing_pytorch as _preprocessing
 class Policy(BasePolicy):
 
     def __init__(
@@ -119,6 +88,7 @@ class Policy(BasePolicy):
         metadata: dict[str, Any] | None = None,
         pytorch_device: str = "cpu",
         is_pytorch: bool = False,
+        cfg = None
     ):
         self._model = model
         self._input_transform = _transforms.compose(transforms)
@@ -142,7 +112,27 @@ class Policy(BasePolicy):
         self.seq = 0
 
         self.count = 0
+        
+        # config
+        self.stage = cfg['stage']
+        self.port = cfg['port']
+        self.use_raw = self.stage not in [OBS,PALIGEMMA_FULL,ACTION,FULL]
+        
+        # filter
+        fs = 50       # 采样率 50Hz
+        cutoff = 1    # 截止频率 5Hz
+        channels = 14 if self.stage == FULL else 32 # 三通道数据（如加速度 X/Y/Z）
+        self.filter = MultiChannelButterworth(cutoff, fs, channels)
 
+    def filter(self,arr):
+        filtered = np.zeros_like(arr)
+        for i in range(arr.shape[0]):
+            filtered[i,:] = self.filter.filter(arr[i,:])
+        return filtered
+
+    def reset_filter(self):
+        self.filter.reset()
+    
     def connect(self):
         def is_connected(sock: socket.socket) -> bool:
             if sock is None:
@@ -168,7 +158,7 @@ class Policy(BasePolicy):
                 return
             
             # 2. 绑定端口（对应 C++ 的 bind()，监听 8888 端口）
-            server_addr = ("0.0.0.0", port)  # 0.0.0.0 等价于 C++ 的 INADDR_ANY（监听所有网卡）
+            server_addr = ("0.0.0.0", self.port)  # 0.0.0.0 等价于 C++ 的 INADDR_ANY（监听所有网卡）
             try:
                 self.listen_fd.bind(server_addr)
             except OSError as e:
@@ -179,7 +169,7 @@ class Policy(BasePolicy):
             # 3. 开始监听连接（对应 C++ 的 listen()，backlog=5）
             try:
                 self.listen_fd.listen(5)  # backlog：等待队列最大长度
-                print(f"服务器启动成功，等待客户端连接...（端口：{port}）")
+                print(f"服务器启动成功，等待客户端连接...（端口：{self.port}）")
             except OSError as e:
                 print(f"监听失败：{str(e)}")
                 self.listen_fd.close()
@@ -235,8 +225,8 @@ class Policy(BasePolicy):
         if type(observation["images"]) is dict:
             for img in observation["images"].values():
                 image = input_msg.images.add()
-                image.dtype = img_dtypes[use_raw]
-                if img_out_type == FP16:
+                image.dtype = img_dtypes[self.use_raw]
+                if self.use_raw:
                     img = img.astype(jnp.float16)
                     img = jnp.moveaxis(img,3,1)
                     print('shape sent:',img.shape)
@@ -254,13 +244,13 @@ class Policy(BasePolicy):
 
         # 添加语言Tensor
         language = input_msg.languages.add()
-        language.dtype = lang_dtypes[use_raw]
+        language.dtype = lang_dtypes[self.use_raw]
         language.shape.extend(observation["prompt"].shape)
-        language.data = observation["prompt"].encode("utf-8") if not use_raw else observation["prompt"].astype(np.float32).tobytes()
+        language.data = observation["prompt"].encode("utf-8") if not self.use_raw else observation["prompt"].astype(np.float32).tobytes()
                
         # 添加状态Tensor
         state = input_msg.states.add()
-        state.dtype = state_dtypes[use_raw]
+        state.dtype = state_dtypes[self.use_raw]
         print(observation["state"].dtype)
         state.shape.extend(observation["state"].shape)
         state.data = observation["state"].tobytes()
@@ -404,7 +394,7 @@ class Policy(BasePolicy):
 
             obs = {}
             if imgs:
-                obs["images"]=dict(zip(img_keys[use_raw],imgs))
+                obs["images"]=dict(zip(img_keys[self.use_raw],imgs))
             if states:
                 obs["state"]=states[0]
             if langs:
@@ -426,7 +416,7 @@ class Policy(BasePolicy):
         return siglip_jax
 
     def proc_action(self,recv_data):
-        if stage == FULL:
+        if self.stage == FULL:
             paligemma_in = np.array(recv_data["prompt"],dtype=np.float64)
         else:
             paligemma_in = np.array(recv_data["prompt"],dtype=np.float16)
@@ -489,7 +479,7 @@ class Policy(BasePolicy):
                         return False
                 return True
 
-        if stage != SKIP:
+        if self.stage != SKIP:
             self.connect()
 
         if self._model is None:
@@ -503,7 +493,7 @@ class Policy(BasePolicy):
         siglip_result = None
         kvcache_result = None
         action_result = None
-        if stage == OBS:
+        if self.stage == OBS:
             self.send(obs)
             recv_data = self.receive()
             obs_old = obs   
@@ -535,7 +525,7 @@ class Policy(BasePolicy):
                 noise = noise[None, ...]  # Make it (1, action_horizon, action_dim)
             sample_kwargs["noise"] = noise            
 
-        if stage in [PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, TEST]:
+        if self.stage in [PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, TEST]:
             obs = _model.Observation.from_dict(inputs)
             obs = _preprocessing.preprocess_observation_pytorch(obs ,train=False)
             obs = {
@@ -543,7 +533,7 @@ class Policy(BasePolicy):
                 'state':obs.state,
                 'prompt':obs.tokenized_prompt
             }
-            if stage == TEST:
+            if self.stage == TEST:
                 test_result_bchw= np.fromfile("/mnt/data/yanjie.shen/RoboTwin/policy/pi0/test/input.bin", dtype=np.float16).reshape(1,3,224,224)
                 test_result = jnp.transpose(jnp.array(test_result_bchw), (0, 2, 3, 1))
                 print('shape_in',test_result.shape)
@@ -556,7 +546,7 @@ class Policy(BasePolicy):
             print('wait receive')
             recv_data = self.receive()
         
-        if stage in [PALIGEMMA_FULL,ACTION,FULL]:
+        if self.stage in [PALIGEMMA_FULL,ACTION,FULL]:
             self.send(obs,reset)
   
             obs = _model.Observation.from_dict(inputs)
@@ -570,20 +560,20 @@ class Policy(BasePolicy):
             print('wait receive')           
             recv_data = self.receive()
 
-        if stage == PREPROC:
+        if self.stage == PREPROC:
             obs_old = obs
             obs = self.proc_recv(recv_data)
             assert dict_equal(obs,obs_old) ,"recv mismatch!"
-        elif stage == SIGLIP or stage == SIGLIP_PRJ or stage == TEST:
+        elif self.stage == SIGLIP or self.stage == SIGLIP_PRJ or self.stage == TEST:
             siglip_result = self.proc_siglip(recv_data)
-        elif stage == PALIGEMMA or stage == PALIGEMMA_FULL:
+        elif self.stage == PALIGEMMA or self.stage == PALIGEMMA_FULL:
             kvcache_result = self.proc_paligemma(recv_data)
-        elif stage == ACTION or stage == FULL:
+        elif self.stage == ACTION or self.stage == FULL:
             action_result = self.proc_action(recv_data)
 
         kvcache_result, actions = self._sample_actions(sample_rng_or_pytorch_device, _model.Observation.from_dict(inputs), **self._sample_kwargs)
 
-        if stage == ACTION_B:
+        if self.stage == ACTION_B:
             obs = _model.Observation.from_dict(inputs)
             obs =  _preprocessing.preprocess_observation_pytorch(obs ,train=False)
             obs = {
@@ -600,7 +590,7 @@ class Policy(BasePolicy):
         }
         self.count +=1
 
-        if stage == ACTION or stage == ACTION_B:
+        if self.stage == ACTION or self.stage == ACTION_B:
            # print('raw action',outputs["actions"])
           #  print('cpp action',action_result)
             np.save("test/py_act.npy",np.array(outputs["actions"].detach().cpu().numpy()))
@@ -616,7 +606,7 @@ class Policy(BasePolicy):
             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
 
         outputs = self._output_transform(outputs)
-        if stage == FULL:
+        if self.stage == FULL:
             np.save("test/py_act.npy",np.array(outputs["actions"]))
             np.save("test/cpp_act.npy",np.array(action_result))
           #  if (reset):

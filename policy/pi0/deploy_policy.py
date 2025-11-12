@@ -9,6 +9,7 @@ sys.path.append(parent_directory)
 
 from pi_model import *
 
+# config.yaml
 
 # Encode observation for the model
 def encode_obs(observation):
@@ -23,9 +24,9 @@ def encode_obs(observation):
 
 
 def get_model(usr_args):
-    train_config_name, model_name, checkpoint_id, pi0_step = (usr_args["train_config_name"], usr_args["model_name"],
-                                                              usr_args["checkpoint_id"], usr_args["pi0_step"])
-    return PI0(train_config_name, model_name, checkpoint_id, pi0_step)
+    train_config_name, model_name, checkpoint_id, pi0_step, cfg = (usr_args["train_config_name"], usr_args["model_name"],
+                                                              usr_args["checkpoint_id"], usr_args["pi0_step"], usr_args["cfg"])
+    return PI0(train_config_name, model_name, checkpoint_id, pi0_step, cfg)
 
 
 def eval(TASK_ENV, model, observation, reset=False):

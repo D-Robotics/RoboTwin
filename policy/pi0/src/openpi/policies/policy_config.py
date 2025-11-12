@@ -14,11 +14,6 @@ import openpi.transforms as transforms
 
 import yaml
 
-yaml_path = "config.yaml"  # YAML 文件路径
-with open(yaml_path, 'r', encoding='utf-8') as f:
-    data = yaml.safe_load(f)  # 使用 safe_load 避免执行任意代码
-USE_CPP = data['use_cpp']
-
 def create_trained_policy(
     train_config: _config.TrainConfig,
     checkpoint_dir: pathlib.Path | str,
@@ -29,6 +24,7 @@ def create_trained_policy(
     norm_stats: dict[str, transforms.NormStats] | None = None,
     robotwin_repo_id: str | None = None,
     pytorch_device: str | None = None,
+    cfg = None
 ) -> _policy.Policy:
     """Create a policy from a trained checkpoint.
 
@@ -55,6 +51,10 @@ def create_trained_policy(
     # Check if this is a PyTorch model by looking for model.safetensors
     weight_path = os.path.join(checkpoint_dir, "model.safetensors")
     is_pytorch = os.path.exists(weight_path)
+
+    # read config
+    data = cfg
+    USE_CPP = data['use_cpp']
 
     if USE_CPP:
         print(f"No model loaded!")
@@ -103,4 +103,5 @@ def create_trained_policy(
         metadata=train_config.policy_metadata,
         is_pytorch=is_pytorch,
         pytorch_device=pytorch_device if is_pytorch else None,
+        cfg = data
     )
