@@ -206,7 +206,7 @@ def main(usr_args):
 
     topk_success_rate = sorted(suc_nums, reverse=True)[:topk]
 
-    file_path = os.path.join(save_dir, f"_result.txt")
+    file_path = os.path.join(args["eval_video_save_dir"], f"_result.txt")
     with open(file_path, "w") as file:
         file.write(f"Timestamp: {current_time}\n\n")
         file.write(f"Instruction Type: {instruction_type}\n\n")
