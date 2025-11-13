@@ -37,7 +37,7 @@ import yaml
 
 plt.ion()
 fig, ax = plt.subplots()
-
+fig.canvas.manager.set_window_title("RoboTwin")
             
 class Base_Task(gym.Env):
 
@@ -83,6 +83,9 @@ class Base_Task(gym.Env):
         self.eval_mode = kwags.get("eval_mode", False)
 
         self.need_topp = True  # TODO
+        
+        # save sample
+        self.count = kwags['now_ep_num']
         
         # video config
         data = kwags.get('cfg')
@@ -598,8 +601,6 @@ class Base_Task(gym.Env):
     def _set_eval_video_ffmpeg(self, ffmpeg=None, ffmpeg_cauchy=None):
         self.eval_video_ffmpeg = ffmpeg
         self.eval_video_ffmpeg_cauchy = ffmpeg_cauchy
-        print('normal',ffmpeg)
-        print('ffmpeg_cauchy',ffmpeg_cauchy)
 
     def close_env(self, clear_cache=False):
         if clear_cache:
@@ -1525,7 +1526,6 @@ class Base_Task(gym.Env):
                 img = self.now_obs["observation"]["head_camera"]["rgb"]  
             if self.fresh:
                 self.show(img)
-       #     plt.imsave("Robo.png",img)
         self.take_action_cnt += 1
         print(f"step: \033[92m{self.take_action_cnt} / {self.step_lim}\033[0m", end="\r")
 
@@ -1724,10 +1724,15 @@ class Base_Task(gym.Env):
                         concatenated_rgb = np.ascontiguousarray(np.concatenate([
                                 self.now_obs["observation"]["cauchy_obs_camera1"]["rgb"], 
                                 self.now_obs["observation"]["cauchy_obs_camera2"]["rgb"]],
-                                axis=0))  
+                                axis=self.cat_dim))  
+                        img = concatenated_rgb
                         self.eval_video_ffmpeg_cauchy.stdin.write(concatenated_rgb.tobytes())
                     elif self.eval_video_ffmpeg:
                         self.eval_video_ffmpeg.stdin.write(self.now_obs["observation"]["head_camera"]["rgb"].tobytes())
+                        img = self.now_obs["observation"]["head_camera"]["rgb"]
+                    if self.fresh:
+                        self.show(img)
+                    plt.imsave("Robo.png",img)
                 return
 
         self._update_render()

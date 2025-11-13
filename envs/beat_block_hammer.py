@@ -7,10 +7,8 @@ import pickle
 class beat_block_hammer(Base_Task):
     def __init__(self):
         super().__init__()
-        self.count = 0
 
     def setup_demo(self, **kwags):
-        self.count = kwags['now_ep_num']
         super()._init_task_env_(**kwags)
 
     def load_actors(self):
@@ -41,11 +39,11 @@ class beat_block_hammer(Base_Task):
                 )
             with open(f'{self.data_path}/{self.count}_pos.pkl','wb') as f:
                 pickle.dump(block_pose,f)
-            print(f'generate {self.count}')
+            print(f'Sample Actor {self.count}')
         else:
             with open(f'{self.data_path}/{self.count}_pos.pkl','rb') as f:
                 block_pose = pickle.load(f)
-            print(f'load {self.count}')
+            print(f'Load Actor {self.count}')
 
         self.block = create_box(
             scene=self,

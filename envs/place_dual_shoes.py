@@ -19,22 +19,12 @@ class place_dual_shoes(Base_Task):
             is_static=True,
         )
 
-        shoe_id = np.random.choice([i for i in range(10)])
-        self.shoe_id = shoe_id
+        if self.rnd:
+            shoe_id = np.random.choice([i for i in range(10)])
+            self.shoe_id = shoe_id
 
-        # left shoe
-        shoes_pose = rand_pose(
-            xlim=[-0.3, -0.2],
-            ylim=[-0.1, 0.05],
-            zlim=[0.741],
-            ylim_prop=True,
-            rotate_rand=True,
-            rotate_lim=[0, 3.14, 0],
-            qpos=[0.707, 0.707, 0, 0],
-        )
-
-        while np.sum(pow(shoes_pose.get_p()[:2] - np.zeros(2), 2)) < 0.0225:
-            shoes_pose = rand_pose(
+            # left shoe
+            shoes_pose_left = rand_pose(
                 xlim=[-0.3, -0.2],
                 ylim=[-0.1, 0.05],
                 zlim=[0.741],
@@ -44,27 +34,19 @@ class place_dual_shoes(Base_Task):
                 qpos=[0.707, 0.707, 0, 0],
             )
 
-        self.left_shoe = create_actor(
-            self,
-            pose=shoes_pose,
-            modelname="041_shoe",
-            convex=True,
-            model_id=shoe_id,
-        )
+            while np.sum(pow(shoes_pose_left.get_p()[:2] - np.zeros(2), 2)) < 0.0225:
+                shoes_pose_left = rand_pose(
+                    xlim=[-0.3, -0.2],
+                    ylim=[-0.1, 0.05],
+                    zlim=[0.741],
+                    ylim_prop=True,
+                    rotate_rand=True,
+                    rotate_lim=[0, 3.14, 0],
+                    qpos=[0.707, 0.707, 0, 0],
+                )
 
-        # right shoe
-        shoes_pose = rand_pose(
-            xlim=[0.2, 0.3],
-            ylim=[-0.1, 0.05],
-            zlim=[0.741],
-            ylim_prop=True,
-            rotate_rand=True,
-            rotate_lim=[0, 3.14, 0],
-            qpos=[0.707, 0.707, 0, 0],
-        )
-
-        while np.sum(pow(shoes_pose.get_p()[:2] - np.zeros(2), 2)) < 0.0225:
-            shoes_pose = rand_pose(
+            # right shoe
+            shoes_pose_right = rand_pose(
                 xlim=[0.2, 0.3],
                 ylim=[-0.1, 0.05],
                 zlim=[0.741],
@@ -74,9 +56,43 @@ class place_dual_shoes(Base_Task):
                 qpos=[0.707, 0.707, 0, 0],
             )
 
+            while np.sum(pow(shoes_pose_right.get_p()[:2] - np.zeros(2), 2)) < 0.0225:
+                shoes_pose_right = rand_pose(
+                    xlim=[0.2, 0.3],
+                    ylim=[-0.1, 0.05],
+                    zlim=[0.741],
+                    ylim_prop=True,
+                    rotate_rand=True,
+                    rotate_lim=[0, 3.14, 0],
+                    qpos=[0.707, 0.707, 0, 0],
+                )
+
+            with open(f'{self.data_path}/{self.count}_pos.pkl','wb') as f:
+                pickle.dump(shoe_id,f)
+                pickle.dump(shoes_pose_left,f)
+                pickle.dump(shoes_pose_right,f)
+                
+            print(f'Sample Actor {self.count}')
+        else:
+            with open(f'{self.data_path}/{self.count}_pos.pkl','rb') as f:
+                shoe_id = pickle.load(f)
+                shoes_pose_left = pickle.load(f)
+                shoes_pose_right = pickle.load(f)
+                
+            print(f'Load Actor {self.count}')
+            
+        self.left_shoe = create_actor(
+            self,
+            pose=shoes_pose_left,
+            modelname="041_shoe",
+            convex=True,
+            model_id=shoe_id,
+        )
+        
+        
         self.right_shoe = create_actor(
             self,
-            pose=shoes_pose,
+            pose=shoes_pose_right,
             modelname="041_shoe",
             convex=True,
             model_id=shoe_id,

@@ -53,8 +53,8 @@ class MultiChannelButterworth:
         self.y_hist = np.zeros((len(self.a), channels))
 
     def reset(self):
-        self.x_hist = np.zeros((len(self.b), channels))
-        self.y_hist = np.zeros((len(self.a), channels))
+        self.x_hist = np.zeros((len(self.b), self.channels))
+        self.y_hist = np.zeros((len(self.a), self.channels))
         
     def filter(self, x):
 
@@ -119,12 +119,14 @@ class Policy(BasePolicy):
         self.use_raw = self.stage not in [OBS,PALIGEMMA_FULL,ACTION,FULL]
         
         # filter
-        fs = 50       # 采样率 50Hz
+        self.do_filt = cfg['filter']
+        fs = cfg.get("fs") or 25    # 采样率 25Hz
         cutoff = 1    # 截止频率 5Hz
-        channels = 14 if self.stage == FULL else 32 # 三通道数据（如加速度 X/Y/Z）
+        channels = 14  # 三通道数据（如加速度 X/Y/Z）
         self.filter = MultiChannelButterworth(cutoff, fs, channels)
 
-    def filter(self,arr):
+
+    def filt(self,arr):
         filtered = np.zeros_like(arr)
         for i in range(arr.shape[0]):
             filtered[i,:] = self.filter.filter(arr[i,:])
@@ -608,11 +610,13 @@ class Policy(BasePolicy):
         if self.stage == FULL:
             np.save("test/py_act.npy",np.array(outputs["actions"]))
             np.save("test/cpp_act.npy",np.array(action_result))
-          #  if (reset):
-          #      reset_filter()
-          #  action_result = filter(action_result.squeeze())
-                
+       
             outputs["actions"] = action_result.squeeze()
+        
+        if self.do_filt:
+            if reset:
+                self.reset_filter()
+            outputs["actions"] = self.filt(outputs["actions"].squeeze())
             
         return outputs
     @property

@@ -40,7 +40,7 @@ class PI0:
             cfg['torch_model'],
             robotwin_repo_id=model_name,
             cfg = cfg)
-        print("loading model success!")
+        print("Load model success!")
         self.img_size = (224, 224)
         self.observation_window = None
         self.pi0_step = pi0_step

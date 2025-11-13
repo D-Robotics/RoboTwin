@@ -34,7 +34,6 @@ current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
 
 import pickle
-import yaml
 
 yaml_path = "config.yaml"  # YAML 文件路径
 with open(yaml_path, 'r', encoding='utf-8') as f:
@@ -193,6 +192,7 @@ def main(usr_args):
 
     usr_args["cfg"]= data
     model = get_model(usr_args)
+    temp_path = f'{Path(save_dir).parent}/temp.pkl'
     st_seed, suc_num, suc_list = eval_policy(task_name,
                                    TASK_ENV,
                                    args,
@@ -200,7 +200,8 @@ def main(usr_args):
                                    st_seed,
                                    test_num=test_num,
                                    video_size=video_size,
-                                   instruction_type=instruction_type)
+                                   instruction_type=instruction_type,
+                                   temp_path=temp_path)
     suc_nums.append(suc_num)
 
     topk_success_rate = sorted(suc_nums, reverse=True)[:topk]
@@ -214,6 +215,10 @@ def main(usr_args):
         file.write(f"\n{suc_list}")
 
     print(f"Data has been saved to {file_path}")
+    
+    if os.path.exists(temp_path):
+        os.remove(temp_path)
+    
     # return task_reward
 
 
@@ -224,7 +229,8 @@ def eval_policy(task_name,
                 st_seed,
                 test_num=100,
                 video_size=None,
-                instruction_type=None):
+                instruction_type=None,
+                temp_path=None):
     print(f"\033[34mTask Name: {args['task_name']}\033[0m")
     print(f"\033[34mPolicy Name: {args['policy_name']}\033[0m")
 
@@ -248,9 +254,32 @@ def eval_policy(task_name,
     # config.yaml
     args['cfg'] = data
     suc_list = []
+    if os.path.exists(temp_path):
+        if data['restore']:
+            with open(temp_path,'rb') as f:
+                os.rmdir(args["eval_video_save_dir"])
+                args["eval_video_save_dir"] = pickle.load(f)
+                now_id = pickle.load(f)
+                TASK_ENV.test_num = now_id
+                succ_seed = now_id
+                suc_list = pickle.load(f)
+                TASK_ENV.suc = len(suc_list)
+                print(f"\033[92mRestored from last eval: {TASK_ENV.suc}/{TASK_ENV.test_num}\033[0m")
+                print(f'\033[92mCurrent success list: {suc_list}\033[0m')
+        else:
+            os.remove(temp_path)
+            print(f"\033[92mStart new eval!\033[0m")
+    else:
+        print(f"\033[92mStart new eval!\033[0m")
+
     while succ_seed < test_num:
         render_freq = args["render_freq"]
         args["render_freq"] = 0
+
+        with open(temp_path,'wb') as f:
+            pickle.dump(args["eval_video_save_dir"],f)
+            pickle.dump(TASK_ENV.test_num,f)
+            pickle.dump(suc_list,f)
 
         if USE_CAUCHY_CAMERA:
             cauchy_obs_camera1 = {
@@ -312,11 +341,11 @@ def eval_policy(task_name,
             instruction = np.random.choice(results[0][instruction_type])
             with open(f'./eval_data/{task_name}/{SAMPLE}/{now_id}_inst.pkl','wb') as f:
                 pickle.dump(instruction,f)
-            print(f'inst {now_id}')
+            print(f'Sample instruction {now_id}')
         else:
-            with open(f'./eval_data/{task_name}{SAMPLE}/{now_id}_inst.pkl','rb') as f:
+            with open(f'./eval_data/{task_name}/{SAMPLE}/{now_id}_inst.pkl','rb') as f:
                 instruction = pickle.load(f)
-            print(f'load {now_id}')
+            print(f'Load instruction {now_id}')
             
         TASK_ENV.set_instruction(instruction=instruction)  # set language instruction
         if USE_VIDEO:
@@ -371,7 +400,7 @@ def eval_policy(task_name,
                         "libx264",
                         "-crf",
                         "23",
-                        f"{TASK_ENV.eval_video_path}/episode{TASK_ENV.test_num}_cauchy.mp4",
+                        f"{TASK_ENV.eval_video_path}/episode{TASK_ENV.test_num}.mp4",
                     ],
                     stdin=subprocess.PIPE,
                 ) if USE_CAUCHY_CAMERA else None
