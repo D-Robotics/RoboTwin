@@ -25,6 +25,8 @@ import importlib
 import argparse
 import pdb
 
+import shutil
+
 import imageio_ffmpeg as ffmpeg
 ffmpeg_path = ffmpeg.get_ffmpeg_exe()
 
@@ -34,17 +36,6 @@ current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
 
 import pickle
-
-yaml_path = "config.yaml"  # YAML 文件路径
-with open(yaml_path, 'r', encoding='utf-8') as f:
-    data = yaml.safe_load(f)  # 使用 safe_load 避免执行任意代码
-RND =data['rnd']
-SAMPLE = data['sample']
-
-USE_CAUCHY_CAMERA =  data['cauchy']
-CAT_DIM = data['cat_dim']
-USE_VIDEO = data['use_video']
-
 
 def class_decorator(task_name):
     envs_module = importlib.import_module(f"envs.{task_name}")
@@ -93,6 +84,15 @@ def main(usr_args):
     save_dir = None
     video_save_dir = None
     video_size = None
+
+    # diy yaml
+    yaml_path = f"./task_config/config.yaml"
+    with open(yaml_path, 'r', encoding='utf-8') as f:
+        data = yaml.safe_load(f) 
+
+    USE_CAUCHY_CAMERA =  data['cauchy']
+    CAT_DIM = data['cat_dim']
+    RESTORE = data['restore']
 
     get_model = eval_function_decorator(policy_name, "get_model")
 
@@ -201,7 +201,9 @@ def main(usr_args):
                                    test_num=test_num,
                                    video_size=video_size,
                                    instruction_type=instruction_type,
-                                   temp_path=temp_path)
+                                   temp_path=temp_path,
+                                   yaml_path=yaml_path,
+                                   restore=RESTORE)
     suc_nums.append(suc_num)
 
     topk_success_rate = sorted(suc_nums, reverse=True)[:topk]
@@ -230,7 +232,9 @@ def eval_policy(task_name,
                 test_num=100,
                 video_size=None,
                 instruction_type=None,
-                temp_path=None):
+                temp_path=None,
+                yaml_path=None,
+                restore=False):
     print(f"\033[34mTask Name: {args['task_name']}\033[0m")
     print(f"\033[34mPolicy Name: {args['policy_name']}\033[0m")
 
@@ -250,36 +254,60 @@ def eval_policy(task_name,
     task_total_reward = 0
     clear_cache_freq = args["clear_cache_freq"]
     args["eval_mode"] = True
-    
-    # config.yaml
-    args['cfg'] = data
+        
     suc_list = []
+
+    # load config.yaml
+    with open(yaml_path, 'r', encoding='utf-8') as f:
+        data = yaml.safe_load(f) 
     if os.path.exists(temp_path):
-        if data['restore']:
+        if restore:
             with open(temp_path,'rb') as f:
                 os.rmdir(args["eval_video_save_dir"])
                 args["eval_video_save_dir"] = pickle.load(f)
+                if not os.path.exists(args["eval_video_save_dir"]):
+                    os.mkdir(args["eval_video_save_dir"])
+                # Restore last config
+                test_yaml_path = f'{args["eval_video_save_dir"]}/config.yaml'
+                if os.path.exists(test_yaml_path):
+                    with open(test_yaml_path, 'r', encoding='utf-8') as g:
+                        data = yaml.safe_load(g) 
+                        print(f"\033[92mRestored config from last eval:\033[0m {test_yaml_path}")
+                else:
+                    print(f"\033[33mCould not restore last config, using current config!\033[0m")
+                # Restore last eval status
                 now_id = pickle.load(f)
                 TASK_ENV.test_num = now_id
                 succ_seed = now_id
                 suc_list = pickle.load(f)
                 TASK_ENV.suc = len(suc_list)
-                print(f"\033[92mRestored from last eval: {TASK_ENV.suc}/{TASK_ENV.test_num}\033[0m")
-                print(f'\033[92mCurrent success list: {suc_list}\033[0m')
+                print(f"\033[92mRestored status from last eval:\033[0m {TASK_ENV.suc}/{TASK_ENV.test_num}")
+                print(f'\033[92mCurrent success list: \033[0m{suc_list}')
         else:
             os.remove(temp_path)
-            print(f"\033[92mStart new eval!\033[0m")
+            print(f"\033[92mCleared last eval status and start new eval!\033[0m")
     else:
         print(f"\033[92mStart new eval!\033[0m")
+        
+    test_yaml_path = f'{args["eval_video_save_dir"]}/config.yaml'
+    if not os.path.exists(test_yaml_path):
+        shutil.copy2(yaml_path, test_yaml_path)
 
+    args['cfg'] = data
+    RND = data['rnd']
+    SAMPLE = data['sample']
+    USE_VIDEO = data['use_video']
+    USE_CAUCHY_CAMERA =  data['cauchy']
+    
     while succ_seed < test_num:
         render_freq = args["render_freq"]
         args["render_freq"] = 0
 
-        with open(temp_path,'wb') as f:
-            pickle.dump(args["eval_video_save_dir"],f)
-            pickle.dump(TASK_ENV.test_num,f)
-            pickle.dump(suc_list,f)
+        if data['restore']:
+            with open(temp_path,'wb') as f:
+                pickle.dump(args["eval_video_save_dir"],f)
+                pickle.dump(TASK_ENV.test_num,f)
+                pickle.dump(suc_list,f)
 
         if USE_CAUCHY_CAMERA:
             cauchy_obs_camera1 = {

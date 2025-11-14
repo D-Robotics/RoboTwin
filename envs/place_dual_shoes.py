@@ -21,7 +21,6 @@ class place_dual_shoes(Base_Task):
 
         if self.rnd:
             shoe_id = np.random.choice([i for i in range(10)])
-            self.shoe_id = shoe_id
 
             # left shoe
             shoes_pose_left = rand_pose(
@@ -80,7 +79,8 @@ class place_dual_shoes(Base_Task):
                 shoes_pose_right = pickle.load(f)
                 
             print(f'Load Actor {self.count}')
-            
+        
+        self.shoe_id = shoe_id
         self.left_shoe = create_actor(
             self,
             pose=shoes_pose_left,
