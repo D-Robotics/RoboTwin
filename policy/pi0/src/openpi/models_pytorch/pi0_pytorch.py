@@ -494,7 +494,8 @@ class PI0Pytorch(nn.Module):
         self.save_index += 1
         inner_stacked = [torch.stack(row, dim=0) for row in past_key_values]  # 每行变成 shape (2, M, N)
         out = torch.stack(inner_stacked, dim=1)  # shape (2, 18, M, N)
-        kv = out.reshape(1,36,816,-1).detach().cpu().to(torch.float32).numpy()
+        kv = out.squeeze()
+        kv = kv.reshape(-1, *kv.shape[2:]).unsqueeze(0).detach().cpu().to(torch.float32).numpy()
         return kv, x_t
 
     def denoise_step(
