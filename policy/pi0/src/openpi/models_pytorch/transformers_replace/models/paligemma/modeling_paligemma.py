@@ -227,8 +227,8 @@ class PaliGemmaModel(PaliGemmaPreTrainedModel):
                 padding_mask, min_dtype
             )
 
-        return causal_mask
-
+        return causal_mask    
+    
     def get_image_features(self, pixel_values: torch.FloatTensor):
         """
         Obtains image last hidden states from the vision tower and apply multimodal projection.

@@ -29,19 +29,18 @@ import einops
 
 BasePolicy: TypeAlias = _base_policy.BasePolicy
 
-TEST, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION, ACTION_B, FULL= range(11)
+TEST, SKIP, OBS, SIGLIP, PALIGEMMA, ACTION, FULL, ACTION_B = range(8)
+DO_PREPROC = False
 
-# test self.stage
 # SKIP: Robotwin raw procedure
-# TEST: Send local input and receive SIGLIP result
-# OBS: Send and receive raw obs to test mismatch
-# PREPROC: Send and receive preprocessed obs to test mismatch
-# SIGLIP: Send preprocessed obs and receive SIGLIP result
-# SIGLIP_PRJ: Send preprocessed obs and receive SIGLIP result before Linear
-# PALIGEMMA: Send preprocessed obs and receive kv_cache result
-# PALIGEMMA_FULL: Send raw obs and receive kv_cache result
+# TEST: Send local input and receive SIGLIP result(Not use)
+# OBS: Send and receive obs to test mismatch
+# SIGLIP: Send obs and receive SIGLIP result
+# PALIGEMMA: Send obs and receive PALIGEMMA result
+# ACTION: Send obs and receive ACTION_EXPERT result
+# FULL: Send obs and receive aloha action result
 
-
+# ACTION_B: Send ACTION_EXPERT input and receive ACTION_EXPERT result
 from scipy.signal import butter
 
 class MultiChannelButterworth:
@@ -75,6 +74,43 @@ class MultiChannelButterworth:
         self.y_hist[0] = y
 
         return y
+
+def dict_equal(d1, d2, atol=1e-6):
+    if not (isinstance(d1, dict) and isinstance(d2, dict)):
+        return False
+    if d1.keys() != d2.keys():
+        return False
+    for key in d1:
+        v1, v2 = d1[key], d2[key]
+        if isinstance(v1, dict) and isinstance(v2, dict):
+            if not dict_equal(v1, v2, atol=atol):
+                return False
+        elif isinstance(v1, np.ndarray):
+            v2 = np.array(v2)
+            v2 = np.squeeze(v2)
+            if v1.shape != v2.shape:
+                print(v1.shape, v2.shape)
+                return False
+            if not np.allclose(v1, v2, atol=atol):
+                with open('1.txt','w') as f:
+                    for i in range(v1.shape[0]):
+                        if not np.allclose(v1[i], v2[i], atol=atol):
+                            f.write(str(v1[i])+'\n')
+                            f.write(str(v2[i])+'\n')
+                            print(i)
+                            break
+
+                return False
+        elif isinstance(v1, (list, tuple)) and isinstance(v2, (list, tuple)):
+            if len(v1) != len(v2):
+                return False
+            for elem1, elem2 in zip(v1, v2):
+                if not dict_equal(elem1, elem2, atol=atol):
+                    return False
+        else:
+            if v1 != v2:
+                return False
+        return True
 class Policy(BasePolicy):
 
     def __init__(
@@ -116,7 +152,7 @@ class Policy(BasePolicy):
         # config
         self.stage = cfg['stage']
         self.port = cfg['port']
-        self.use_raw = self.stage not in [OBS,PALIGEMMA_FULL,ACTION,FULL]
+        self.use_raw = DO_PREPROC
         
         # filter
         self.do_filt = cfg['filter']
@@ -433,7 +469,8 @@ class Policy(BasePolicy):
     def proc_paligemma(self,recv_data):
         paligemma_in = np.array(recv_data["prompt"],dtype=np.float32)
         paligemma_out = (paligemma_in[:18],paligemma_in[18:])
-
+        if self._is_pytorch_model:
+            paligemma_jax = torch.tensor(paligemma_in)
         paligemma_jax = jax.tree.map(
             lambda x: jnp.array(x, dtype=jnp.bfloat16),
             paligemma_out
@@ -442,44 +479,6 @@ class Policy(BasePolicy):
     
     @override
     def infer(self, obs: dict,reset=False, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
-        # PATCH
-        def dict_equal(d1, d2, atol=1e-6):
-            if not (isinstance(d1, dict) and isinstance(d2, dict)):
-                return False
-            if d1.keys() != d2.keys():
-                return False
-            for key in d1:
-                v1, v2 = d1[key], d2[key]
-                if isinstance(v1, dict) and isinstance(v2, dict):
-                    if not dict_equal(v1, v2, atol=atol):
-                        return False
-                elif isinstance(v1, np.ndarray):
-                    v2 = np.array(v2)
-                    v2 = np.squeeze(v2)
-                    if v1.shape != v2.shape:
-                        print(v1.shape, v2.shape)
-                        return False
-                    if not np.allclose(v1, v2, atol=atol):
-                        with open('1.txt','w') as f:
-                            for i in range(v1.shape[0]):
-                                if not np.allclose(v1[i], v2[i], atol=atol):
-                                    f.write(str(v1[i])+'\n')
-                                    f.write(str(v2[i])+'\n')
-                                    print(i)
-                                    break
-
-                        return False
-                elif isinstance(v1, (list, tuple)) and isinstance(v2, (list, tuple)):
-                    if len(v1) != len(v2):
-                        return False
-                    for elem1, elem2 in zip(v1, v2):
-                        if not dict_equal(elem1, elem2, atol=atol):
-                            return False
-                else:
-                    if v1 != v2:
-                        return False
-                return True
-
         if self.stage != SKIP:
             self.connect()
 
@@ -526,7 +525,7 @@ class Policy(BasePolicy):
                 noise = noise[None, ...]  # Make it (1, action_horizon, action_dim)
             sample_kwargs["noise"] = noise            
 
-        if self.stage in [PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, TEST]:
+        if DO_PREPROC:
             obs = _model.Observation.from_dict(inputs)
             obs = _preprocessing.preprocess_observation_pytorch(obs ,train=False)
             obs = {
@@ -547,7 +546,7 @@ class Policy(BasePolicy):
             print('wait receive')
             recv_data = self.receive()
         
-        if self.stage in [PALIGEMMA_FULL,ACTION,FULL]:
+        if not DO_PREPROC and self.stage != SKIP:
             self.send(obs,reset)
   
             obs = _model.Observation.from_dict(inputs)
@@ -561,13 +560,13 @@ class Policy(BasePolicy):
             print('wait receive')           
             recv_data = self.receive()
 
-        if self.stage == PREPROC:
+        if self.stage == OBS:
             obs_old = obs
             obs = self.proc_recv(recv_data)
             assert dict_equal(obs,obs_old) ,"recv mismatch!"
-        elif self.stage == SIGLIP or self.stage == SIGLIP_PRJ or self.stage == TEST:
+        elif self.stage == SIGLIP or self.stage == TEST:
             siglip_result = self.proc_siglip(recv_data)
-        elif self.stage == PALIGEMMA or self.stage == PALIGEMMA_FULL:
+        elif self.stage == PALIGEMMA:
             kvcache_result = self.proc_paligemma(recv_data)
         elif self.stage == ACTION or self.stage == FULL:
             action_result = self.proc_action(recv_data)
