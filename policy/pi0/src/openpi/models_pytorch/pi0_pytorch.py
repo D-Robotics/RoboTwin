@@ -138,6 +138,7 @@ class PI0Pytorch(nn.Module):
         super().__init__()
         self.config = config
         self.pi05 = False
+        self.save_index = 0
 
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)
@@ -161,7 +162,7 @@ class PI0Pytorch(nn.Module):
             self.action_time_mlp_out = nn.Linear(action_expert_config.width, action_expert_config.width)
 
         torch.set_float32_matmul_precision("high")
-        self.sample_actions = torch.compile(self.sample_actions, mode="max-autotune")
+        # self.sample_actions = torch.compile(self.sample_actions, mode="max-autotune")
 
         # Initialize gradient checkpointing flag
         self.gradient_checkpointing_enabled = False
@@ -427,6 +428,7 @@ class PI0Pytorch(nn.Module):
     @torch.no_grad()
     def sample_actions(self, device, observation, noise=None, num_steps=10) -> Tensor:
         """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
+        npy_save_path = f"/mnt/data/weiyang.hu/RoboTwin-main/gemma_expert_npy_calibration_1112/{self.save_index}/"
         bsize = observation.state.shape[0]
         if noise is None:
             actions_shape = (bsize, self.config.action_horizon, self.config.action_dim)
@@ -450,14 +452,28 @@ class PI0Pytorch(nn.Module):
             use_cache=True,
         )
 
+
         dt = -1.0 / num_steps
         dt = torch.tensor(dt, dtype=torch.float32, device=device)
 
         x_t = noise
         time = torch.tensor(1.0, dtype=torch.float32, device=device)
+        
+        # print("Saving to:", npy_save_path)
+        # save_kv_cache(past_key_values, npy_save_path)
+        # _debug_print("state", state)
+        # _debug_print("x_t", x_t)
+        # np.save(os.path.join(npy_save_path, "x_t.npy"), x_t.detach().cpu().numpy())
+        # np.save(os.path.join(npy_save_path, "state.npy"), state.detach().cpu().numpy())
+        # np.save(os.path.join(npy_save_path, "prefix_embs.npy"), prefix_embs.to(torch.float32).detach().cpu().numpy())
+        # np.save(os.path.join(npy_save_path, "prefix_att_2d_masks_4d.npy"), prefix_att_2d_masks_4d.to(torch.float32).detach().cpu().numpy())
+        # np.save(os.path.join(npy_save_path, "lang_tokens.npy"), torch.tensor(lang_tokens).detach().cpu().numpy())
+        # np.save(os.path.join(npy_save_path, "llm_output.npy"), _[0].to(torch.float32).detach().cpu().numpy())
+        # count = 0
+        
         while time >= -dt / 2:
             expanded_time = time.expand(bsize)
-            v_t = self.denoise_step(
+            v_t, mask, posid = self.denoise_step(
                 state,
                 prefix_pad_masks,
                 past_key_values,
@@ -466,8 +482,15 @@ class PI0Pytorch(nn.Module):
             )
 
             # Euler step - use new tensor assignment instead of in-place operation
+            # np.save(os.path.join(npy_save_path, f"v_t_time_{count}.npy"), v_t.detach().cpu().numpy())
+            # np.save(os.path.join(npy_save_path, f"mask_time_{count}.npy"), mask.detach().cpu().numpy())
+            # np.save(os.path.join(npy_save_path, f"posid_time_{count}.npy"), posid.detach().cpu().numpy())
+            # Euler step - use new tensor assignment instead of in-place operation
             x_t = x_t + dt * v_t
+            # np.save(os.path.join(npy_save_path, f"x_t_time_{count}.npy"), x_t.detach().cpu().numpy())
+            # count += 1
             time += dt
+        # self.save_index += 1
         return x_t
 
     def denoise_step(
@@ -519,4 +542,4 @@ class PI0Pytorch(nn.Module):
         suffix_out = outputs_embeds[1]
         suffix_out = suffix_out[:, -self.config.action_horizon :]
         suffix_out = suffix_out.to(dtype=torch.float32)
-        return self.action_out_proj(suffix_out)
+        return self.action_out_proj(suffix_out), full_att_2d_masks_4d, position_ids

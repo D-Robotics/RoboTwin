@@ -159,7 +159,7 @@ def main(usr_args):
 
     st_seed = 100000 * (1 + seed)
     suc_nums = []
-    test_num = 10
+    test_num = 100
     topk = 1
 
     model = get_model(usr_args)
@@ -216,40 +216,34 @@ def eval_policy(task_name,
     clear_cache_freq = args["clear_cache_freq"]
 
     args["eval_mode"] = True
-
-    seed_preset_list = [100000, 100002, 100003, 100007, 100008, 100009, 100010, 100011, 100012, 100013]
-    counter = 0
     while succ_seed < test_num:
-        now_seed = seed_preset_list[counter]
         render_freq = args["render_freq"]
         args["render_freq"] = 0
 
         if expert_check:
-            # try:
-            TASK_ENV.setup_demo(now_ep_num=now_id, seed=now_seed, is_test=True, **args)
-            episode_info = TASK_ENV.play_once()
-            TASK_ENV.close_env()
-            # except UnStableError as e:
-            #     # print(" -------------")
-            #     # print("Error: ", e)
-            #     # print(" -------------")
-            #     TASK_ENV.close_env()
-            #     now_seed += 1
-            #     args["render_freq"] = render_freq
-            #     continue
-            # except Exception as e:
-            #     # stack_trace = traceback.format_exc()
-            #     # print(" -------------")
-            #     # print("Error: ", e)
-            #     # print(" -------------")
-            #     TASK_ENV.close_env()
-            #     now_seed += 1
-            #     args["render_freq"] = render_freq
-            #     print("error occurs !")
-            #     continue
-        print(f"Evaluating seed: {now_seed}")
-        print("Expert check: ", TASK_ENV.plan_success, TASK_ENV.check_success())
-        print(f"succ_seed: {succ_seed}")
+            try:
+                TASK_ENV.setup_demo(now_ep_num=now_id, seed=now_seed, is_test=True, **args)
+                episode_info = TASK_ENV.play_once()
+                TASK_ENV.close_env()
+            except UnStableError as e:
+                # print(" -------------")
+                # print("Error: ", e)
+                # print(" -------------")
+                TASK_ENV.close_env()
+                now_seed += 1
+                args["render_freq"] = render_freq
+                continue
+            except Exception as e:
+                # stack_trace = traceback.format_exc()
+                # print(" -------------")
+                # print("Error: ", e)
+                # print(" -------------")
+                TASK_ENV.close_env()
+                now_seed += 1
+                args["render_freq"] = render_freq
+                print("error occurs !")
+                continue
+
         if (not expert_check) or (TASK_ENV.plan_success and TASK_ENV.check_success()):
             succ_seed += 1
             suc_test_seed_list.append(now_seed)
@@ -258,7 +252,6 @@ def eval_policy(task_name,
             args["render_freq"] = render_freq
             continue
 
-        print("succeed seeds: ", suc_test_seed_list)
         args["render_freq"] = render_freq
 
         TASK_ENV.setup_demo(now_ep_num=now_id, seed=now_seed, is_test=True, **args)
@@ -327,7 +320,7 @@ def eval_policy(task_name,
             f"Success rate: \033[96m{TASK_ENV.suc}/{TASK_ENV.test_num}\033[0m => \033[95m{round(TASK_ENV.suc/TASK_ENV.test_num*100, 1)}%\033[0m, current seed: \033[90m{now_seed}\033[0m\n"
         )
         # TASK_ENV._take_picture()
-        counter += 1
+        now_seed += 1
 
     return now_seed, TASK_ENV.suc
 

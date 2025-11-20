@@ -13,6 +13,9 @@ viewer_show.*
 eval_video/
 **/.DS_Store
 gemma_expert_npy_calibration/
+gemma_expert_npy_calibration_1105/
+gemma_expert_npy_calibration_1112/
+gemma_expert_npy_calibration*
 # eval result
 eval_result/
 
@@ -23,9 +26,11 @@ assets/*
 
 policy/weights/*
 policy/pi0/processed_data
+policy/pi0/processed_data_hammer
 policy/pi0/processed_data_50
 policy/pi0/processed_data_500_random
 policy/pi0/training_data
+policy/pi0/training_data_hammer
 policy/pi0/training_data_50
 policy/pi0/training_data_500_random
 
