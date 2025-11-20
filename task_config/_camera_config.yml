@@ -20,5 +20,5 @@ Large_D435:
 
 Cauchy_OBS:
   fovy: 70
-  w: 960
-  h: 720
+  w: 480
+  h: 360

@@ -34,16 +34,25 @@ current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
 
 import yaml
+import cv2
 
 plt.ion()
 fig, ax = plt.subplots()
 fig.canvas.manager.set_window_title("RoboTwin")
+fig.canvas.manager.window.geometry("1920*720") 
             
 class Base_Task(gym.Env):
 
     def __init__(self):
         pass
     
+    def inter(self,img):
+        bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        up = cv2.resize(img, None, fx=self.hd, fy=self.hd, interpolation=cv2.INTER_CUBIC)
+        cv2.imwrite("up2x.jpg", up)
+
+        return up
+
     # show img
     def show(self,img):
         ax.clear()
@@ -91,7 +100,9 @@ class Base_Task(gym.Env):
         data = kwags.get('cfg')
         self.cat_dim =data['cat_dim']
         self.fresh = data['fresh']
-
+        self.cauchy = data['cauchy']
+        self.hd = data['hd']
+        
         # dataset config
         self.rnd = data['rnd']
         sample = data['sample']
@@ -1510,22 +1521,25 @@ class Base_Task(gym.Env):
     def take_action(self, action, action_type:Literal['qpos', 'ee', 'delta_ee']='qpos'):  # action_type: qpos or ee
         if self.take_action_cnt == self.step_lim or self.eval_success:
             return
-
         eval_video_freq = 1  # fixed
-        if (self.eval_video_path is not None and self.take_action_cnt % eval_video_freq == 0):
+        if (self.take_action_cnt % eval_video_freq == 0):
             # save cauchy
-            if self.eval_video_ffmpeg_cauchy:
+            if self.cauchy:
                 concatenated_rgb = np.ascontiguousarray(np.concatenate([
-                                self.now_obs["observation"]["cauchy_obs_camera1"]["rgb"], 
-                                self.now_obs["observation"]["cauchy_obs_camera2"]["rgb"]],
-                                axis=self.cat_dim))  
+                    self.now_obs["observation"]["cauchy_obs_camera1"]["rgb"], 
+                    self.now_obs["observation"]["cauchy_obs_camera2"]["rgb"]],
+                    axis=self.cat_dim))  
                 img = concatenated_rgb
-                self.eval_video_ffmpeg_cauchy.stdin.write(concatenated_rgb.tobytes())
-            elif self.eval_video_ffmpeg:
-                self.eval_video_ffmpeg.stdin.write(self.now_obs["observation"]["head_camera"]["rgb"].tobytes())
-                img = self.now_obs["observation"]["head_camera"]["rgb"]  
+            else:
+                img = self.now_obs["observation"]["head_camera"]["rgb"]
+            img = self.inter(img)
             if self.fresh:
                 self.show(img)
+            if (self.eval_video_path is not None):
+                if self.eval_video_ffmpeg_cauchy:
+                    self.eval_video_ffmpeg_cauchy.stdin.write(img.tobytes())
+                elif self.eval_video_ffmpeg:
+                    self.eval_video_ffmpeg.stdin.write(img.tobytes())
         self.take_action_cnt += 1
         print(f"step: \033[92m{self.take_action_cnt} / {self.step_lim}\033[0m", end="\r")
 
@@ -1719,20 +1733,23 @@ class Base_Task(gym.Env):
             if self.check_success():
                 self.eval_success = True
                 self.get_obs() # update obs
+                if self.cauchy:
+                    concatenated_rgb = np.ascontiguousarray(np.concatenate([
+                        self.now_obs["observation"]["cauchy_obs_camera1"]["rgb"], 
+                        self.now_obs["observation"]["cauchy_obs_camera2"]["rgb"]],
+                        axis=self.cat_dim))  
+                    img = concatenated_rgb
+                else:
+                    img = self.now_obs["observation"]["head_camera"]["rgb"]
+                img = self.inter(img)
+                if self.fresh:
+                    self.show(img)
                 if (self.eval_video_path is not None):
                     if self.eval_video_ffmpeg_cauchy:
-                        concatenated_rgb = np.ascontiguousarray(np.concatenate([
-                                self.now_obs["observation"]["cauchy_obs_camera1"]["rgb"], 
-                                self.now_obs["observation"]["cauchy_obs_camera2"]["rgb"]],
-                                axis=self.cat_dim))  
-                        img = concatenated_rgb
-                        self.eval_video_ffmpeg_cauchy.stdin.write(concatenated_rgb.tobytes())
+                        self.eval_video_ffmpeg_cauchy.stdin.write(img.tobytes())
                     elif self.eval_video_ffmpeg:
-                        self.eval_video_ffmpeg.stdin.write(self.now_obs["observation"]["head_camera"]["rgb"].tobytes())
-                        img = self.now_obs["observation"]["head_camera"]["rgb"]
-                    if self.fresh:
-                        self.show(img)
-                    plt.imsave("Robo.png",img)
+                        self.eval_video_ffmpeg.stdin.write(img.tobytes())
+               #     plt.imsave("Robo.png",img)
                 return
 
         self._update_render()

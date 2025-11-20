@@ -487,7 +487,7 @@ class Policy(BasePolicy):
             recv_data = self.receive()
             action_result = self.proc_action(recv_data)
             outputs = {"actions":action_result.squeeze()}
-            np.save("test/cpp_act.npy",np.array(action_result))
+        #    np.save("test/cpp_act.npy",np.array(action_result))
             return outputs
             
         siglip_result = None
@@ -593,8 +593,8 @@ class Policy(BasePolicy):
         if self.stage == ACTION or self.stage == ACTION_B:
            # print('raw action',outputs["actions"])
           #  print('cpp action',action_result)
-            np.save("test/py_act.npy",np.array(outputs["actions"].detach().cpu().numpy()))
-            np.save("test/cpp_act.npy",np.array(action_result))
+          #  np.save("test/py_act.npy",np.array(outputs["actions"].detach().cpu().numpy()))
+          #  np.save("test/cpp_act.npy",np.array(action_result))
           #  reset_filter()
           #  action_result = filter(action_result.squeeze()).unsqueeze(0)
             outputs["actions"] = action_result
@@ -607,8 +607,8 @@ class Policy(BasePolicy):
 
         outputs = self._output_transform(outputs)
         if self.stage == FULL:
-            np.save("test/py_act.npy",np.array(outputs["actions"]))
-            np.save("test/cpp_act.npy",np.array(action_result))
+         #   np.save("test/py_act.npy",np.array(outputs["actions"]))
+         #   np.save("test/cpp_act.npy",np.array(action_result))
        
             outputs["actions"] = action_result.squeeze()
         

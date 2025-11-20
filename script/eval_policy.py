@@ -93,6 +93,7 @@ def main(usr_args):
     USE_CAUCHY_CAMERA =  data['cauchy']
     CAT_DIM = data['cat_dim']
     RESTORE = data['restore']
+    HD = data['hd']
 
     get_model = eval_function_decorator(policy_name, "get_model")
 
@@ -150,12 +151,12 @@ def main(usr_args):
         if USE_CAUCHY_CAMERA:
             camera_config = get_camera_config("Cauchy_OBS")
             if CAT_DIM == 0:
-                video_size = str(camera_config["w"]) + "x" + str(camera_config["h"]*2)
+                video_size = str(camera_config["w"]*HD) + "x" + str(camera_config["h"]*2*HD)
             else:
-                video_size = str(camera_config["w"]*2) + "x" + str(camera_config["h"])
+                video_size = str(camera_config["w"]*2*HD) + "x" + str(camera_config["h"]*HD)
         else:
             camera_config = get_camera_config(args["camera"]["head_camera_type"])
-            video_size = str(camera_config["w"]) + "x" + str(camera_config["h"])
+            video_size = str(camera_config["w"]*HD) + "x" + str(camera_config["h"]*HD)
         video_save_dir.mkdir(parents=True, exist_ok=True)
         args["eval_video_save_dir"] = video_save_dir
 
