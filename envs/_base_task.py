@@ -39,8 +39,11 @@ import cv2
 plt.ion()
 fig, ax = plt.subplots()
 fig.canvas.manager.set_window_title("RoboTwin")
-fig.canvas.manager.window.geometry("1920*720") 
-            
+dpi = plt.rcParams['figure.dpi']  # 默认 100
+width_inch = 1920 / dpi
+height_inch = 720 / dpi
+fig.set_size_inches(width_inch, height_inch)
+
 class Base_Task(gym.Env):
 
     def __init__(self):
