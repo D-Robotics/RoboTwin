@@ -6,7 +6,7 @@ import dataclasses
 import difflib
 import logging
 import pathlib
-from typing import Any, Protocol, TypeAlias
+from typing import Any, Protocol, TypeAlias, Literal
 
 import etils.epath as epath
 import flax.nnx as nnx
@@ -285,7 +285,7 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
         )
 
 
-@dataclasses.dataclass(frozen=False)
+@dataclasses.dataclass(frozen=True)
 class TrainConfig:
     # Name of the config. Must be unique. Will be used to reference this config.
     name: tyro.conf.Suppress[str]
@@ -302,6 +302,12 @@ class TrainConfig:
     # A weight loader can optionally load (possibly partial) weights from disk after the model is initialized.
     weight_loader: weight_loaders.WeightLoader = dataclasses.field(default_factory=weight_loaders.NoOpWeightLoader)
 
+    # Optional path to a PyTorch checkpoint to load weights from.
+    pytorch_weight_path: str | None = None
+
+    # Precision for PyTorch training.
+    pytorch_training_precision: Literal["bfloat16", "float32"] = "bfloat16"
+
     lr_schedule: _optimizer.LRScheduleConfig = dataclasses.field(default_factory=_optimizer.CosineDecaySchedule)
     optimizer: _optimizer.OptimizerConfig = dataclasses.field(default_factory=_optimizer.AdamW)
     ema_decay: float | None = 0.99
@@ -315,7 +321,7 @@ class TrainConfig:
     # Base directory for config assets (e.g., norm stats).
     assets_base_dir: str = "./assets"
     # Base directory for checkpoints.
-    checkpoint_base_dir: str = "./checkpoints/"
+    checkpoint_base_dir: str = "./checkpoints"
 
     # Random seed that will be used by random generators during training.
     seed: int = 42
@@ -349,7 +355,7 @@ class TrainConfig:
     # device memory will be reduced but training could potentially be slower.
     # eg. if total device is 4 and fsdp devices is 2; then the model will shard to 2 devices and run
     # data parallel between 2 groups of devices.
-    fsdp_devices: int = 2
+    fsdp_devices: int = 1
 
     @property
     def assets_dirs(self) -> pathlib.Path:
@@ -472,6 +478,7 @@ _CONFIGS = [
         freeze_filter=pi0.Pi0Config().get_freeze_filter(),
         batch_size=32,  # the total batch_size not pre_gpu batch_size
         weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/data/weiyang.hu/models/openpi/openpi-assets/checkpoints/pi0_base/params"),
+        pytorch_weight_path="/mnt/data/weiyang.hu/models/openpi/pi0_base_pytorch",
         num_train_steps=30000,
         fsdp_devices=4,  # refer line 359
     ),
