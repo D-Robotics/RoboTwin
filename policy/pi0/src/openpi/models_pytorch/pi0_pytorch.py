@@ -496,6 +496,11 @@ class PI0Pytorch(nn.Module):
         out = torch.stack(inner_stacked, dim=1)  # shape (2, 18, M, N)
         kv = out.squeeze()
         kv = kv.reshape(-1, *kv.shape[2:]).unsqueeze(0).detach().cpu().to(torch.float32).numpy()
+        mask_np = mask.detach().cpu().numpy()
+        np.save("test/kv.npy",kv)
+        np.save("test/posid.npy", posid.detach().cpu().numpy())
+        np.save("test/mask.npy",mask_np)
+
         return kv, x_t
 
     def denoise_step(

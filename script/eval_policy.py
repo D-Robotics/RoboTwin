@@ -91,6 +91,7 @@ def main(usr_args):
         data = yaml.safe_load(f) 
 
     USE_CAUCHY_CAMERA =  data['cauchy']
+    RAW_TRI = data['raw_tri']
     CAT_DIM = data['cat_dim']
     RESTORE = data['restore']
     HD = data['hd']
@@ -154,6 +155,12 @@ def main(usr_args):
                 video_size = str(camera_config["w"]*HD) + "x" + str(camera_config["h"]*2*HD)
             else:
                 video_size = str(camera_config["w"]*2*HD) + "x" + str(camera_config["h"]*HD)
+        elif RAW_TRI:
+            camera_config = get_camera_config(args["camera"]["head_camera_type"]) 
+            if CAT_DIM == 0:
+                video_size = str(camera_config["w"]*HD) + "x" + str(camera_config["h"]*3*HD)
+            else:
+                video_size = str(camera_config["w"]*3*HD) + "x" + str(camera_config["h"]*HD) 
         else:
             camera_config = get_camera_config(args["camera"]["head_camera_type"])
             video_size = str(camera_config["w"]*HD) + "x" + str(camera_config["h"]*HD)
@@ -277,10 +284,15 @@ def eval_policy(task_name,
                 else:
                     print(f"\033[33mCould not restore last config, using current config!\033[0m")
                 # Restore last eval status
-                now_id = pickle.load(f)
+                temp_restore_path = f'{args["eval_video_save_dir"]}/temp.pkl'
+                if os.path.exists(temp_restore_path):
+                    g= open(temp_restore_path,'rb')
+                else:
+                    g= f
+                now_id = pickle.load(g)
                 TASK_ENV.test_num = now_id
                 succ_seed = now_id
-                suc_list = pickle.load(f)
+                suc_list = pickle.load(g)
                 TASK_ENV.suc = len(suc_list)
                 print(f"\033[92mRestored status from last eval:\033[0m {TASK_ENV.suc}/{TASK_ENV.test_num}")
                 print(f'\033[92mCurrent success list: \033[0m{suc_list}')
@@ -300,6 +312,9 @@ def eval_policy(task_name,
     USE_VIDEO = data['use_video']
     USE_CAUCHY_CAMERA =  data['cauchy']
     
+    del(args["left_embodiment_config"]["static_camera_list"][1])
+    del(args["right_embodiment_config"]["static_camera_list"][1])
+    
     while succ_seed < test_num:
         render_freq = args["render_freq"]
         args["render_freq"] = 0
@@ -309,7 +324,12 @@ def eval_policy(task_name,
                 pickle.dump(args["eval_video_save_dir"],f)
                 pickle.dump(TASK_ENV.test_num,f)
                 pickle.dump(suc_list,f)
-
+                
+            with open(temp_restore_path,'wb') as f:
+                pickle.dump(args["eval_video_save_dir"],f)
+                pickle.dump(TASK_ENV.test_num,f)
+                pickle.dump(suc_list,f)
+            
         if USE_CAUCHY_CAMERA:
             cauchy_obs_camera1 = {
                 'name': 'cauchy_obs_camera1', 
@@ -326,9 +346,9 @@ def eval_policy(task_name,
                 'left': [0, 1, 0]                # 保持 left 向量
             }
 
-
             args["left_embodiment_config"]["static_camera_list"].append(cauchy_obs_camera1)
             args["left_embodiment_config"]["static_camera_list"].append(cauchy_obs_camera2)
+            
         if expert_check:
             try:
                 TASK_ENV.setup_demo(now_ep_num=now_id, seed=now_seed, is_test=True, **args)

@@ -30,7 +30,7 @@ import einops
 BasePolicy: TypeAlias = _base_policy.BasePolicy
 
 TEST, SKIP, OBS, SIGLIP, PALIGEMMA, ACTION, FULL, ACTION_B = range(8)
-DO_PREPROC = False
+DBG = False
 
 # SKIP: Robotwin raw procedure
 # TEST: Send local input and receive SIGLIP result(Not use)
@@ -152,7 +152,9 @@ class Policy(BasePolicy):
         # config
         self.stage = cfg['stage']
         self.port = cfg['port']
-        self.use_raw = DO_PREPROC
+        self.do_preproc = cfg['do_preproc']
+        self.use_raw = self.do_preproc and self.stage!=FULL
+        self.visp = cfg['visp']
         
         # filter
         self.do_filt = cfg['filter']
@@ -275,8 +277,14 @@ class Policy(BasePolicy):
             # send kvcache
             img = observation["images"]
             image = input_msg.images.add()
-            img = img.astype(jnp.float32)
-            image.dtype = msg_pb2.Tensor.FLOAT32
+            if self.visp:
+                img = img.astype(jnp.float16)
+                image.dtype = msg_pb2.Tensor.FP16
+                print("sent fp16")
+            else:
+                img = img.astype(jnp.float32)
+                image.dtype = msg_pb2.Tensor.FLOAT32
+                print("sent fp32")
             image.shape.extend(img.shape)
             image.data = img.tobytes()
 
@@ -298,7 +306,7 @@ class Policy(BasePolicy):
                 # 1. 序列化 Protobuf 消息
                 serialized_data = msg.SerializeToString()
                 data_len = len(serialized_data)
-                print(f"待发送数据长度：{data_len}字节")
+        #        print(f"待发送数据长度：{data_len}字节")
 
                 # 2. 关键：长度字段按“大端字节序”打包（与 C++ 网络序一致）
                 net_len = socket.htonl(data_len)  # 主机序→网络序（大端）
@@ -306,13 +314,13 @@ class Policy(BasePolicy):
                 # 验证长度字段是否为 4 字节（必须满足）
                 assert len(net_len_bytes) == 4, f"长度字段应为4字节，实际{len(net_len_bytes)}字节"
 
-                print(f"待发送的长度字段（十六进制）：{net_len_bytes.hex()}")
+        #        print(f"待发送的长度字段（十六进制）：{net_len_bytes.hex()}")
                 # 3. 先发送长度，再发送数据
                 sock.sendall(net_len_bytes)  # 发送 4 字节长度
-                print(f"发送的长度字段（十六进制）：{net_len_bytes.hex()}")
+        #        print(f"发送的长度字段（十六进制）：{net_len_bytes.hex()}")
                 
                 sock.sendall(serialized_data)  # 发送 Protobuf 数据
-                print(f"发送成功：长度字段4字节 + 数据{data_len}字节")
+                print(f"发送成功，长度：{data_len}字节\n")
                 return True
             except Exception as e:
                 print(f"发送失败：{str(e)}")
@@ -327,12 +335,12 @@ class Policy(BasePolicy):
         def parse_header(header):
             """解析并打印Header信息"""
             print("===== 解析 Header 信息 =====")
-            print(f"消息序列号 (seq): {header.seq}")
-            print(f"时间戳: {header.stamp.sec} 秒 {header.stamp.nsec} 纳秒")
+            print(f"序列号 : {header.seq}")
+            print(f"时间戳: {header.stamp.sec}.{header.stamp.nsec}")
             time_sec = header.stamp.sec + header.stamp.nsec / 1e9
-            print(f"（等价于 {time_sec} 秒）")
-            print(f"坐标系 ID (frame_id): {header.frame_id}")
-            print("===========================")    
+       #     print(f"（等价于 {time_sec} 秒）")
+       #     print(f"坐标系 ID (frame_id): {header.frame_id}")
+            print("====== 解析 Body 信息 ======")    
         
         def recv_proto_message(sock, msg):
             """接收protobuf消息(先接收长度，再接收数据)"""
@@ -348,7 +356,7 @@ class Policy(BasePolicy):
                 # 网络序转主机序（若系统是小端，此步必须；大端系统可省略，但建议保留兼容性）
                 data_len = socket.ntohl(net_len)
 
-                print(f"解析到数据长度：{data_len}字节（等待接收）")  # 加日志验证长度是否合理
+           #     print(f"解析到数据长度：{data_len}字节（等待接收）")  # 加日志验证长度是否合理
 
                 # 接收数据
                 serialized_data = b''
@@ -424,7 +432,7 @@ class Policy(BasePolicy):
                 print()
                 states.append(parse_type(state))
 
-            print("解析完成\n")
+            print("============================")
 
             img_keys = [['cam_high', 'cam_left_wrist', 'cam_right_wrist'],
                         ['base_0_rgb','left_wrist_0_rgb','right_wrist_0_rgb']]
@@ -454,17 +462,17 @@ class Policy(BasePolicy):
 
     def proc_action(self,recv_data):
         if self.stage == FULL:
-            paligemma_in = np.array(recv_data["prompt"],dtype=np.float64)
+            action_in = np.array(recv_data["prompt"],dtype=np.float64)
         else:
-            paligemma_in = np.array(recv_data["prompt"],dtype=np.float16)
+            action_in = np.array(recv_data["prompt"],dtype=np.float16)
         if self._is_pytorch_model:
-            paligemma_jax = torch.tensor(paligemma_in)
+            action_jax = torch.tensor(action_in)
         else:
-            paligemma_jax = jax.tree.map(
+            action_jax = jax.tree.map(
                 lambda x: jnp.array(x),
-                paligemma_in
+                action_in
             )
-        return paligemma_jax
+        return action_jax
     
     def proc_paligemma(self,recv_data):
         paligemma_in = np.array(recv_data["prompt"],dtype=np.float32)
@@ -525,7 +533,7 @@ class Policy(BasePolicy):
                 noise = noise[None, ...]  # Make it (1, action_horizon, action_dim)
             sample_kwargs["noise"] = noise            
 
-        if DO_PREPROC:
+        if self.do_preproc and self.stage != ACTION_B and self.stage != SKIP:
             obs = _model.Observation.from_dict(inputs)
             obs = _preprocessing.preprocess_observation_pytorch(obs ,train=False)
             obs = {
@@ -546,7 +554,7 @@ class Policy(BasePolicy):
             print('wait receive')
             recv_data = self.receive()
         
-        if not DO_PREPROC and self.stage != SKIP:
+        if not self.do_preproc and self.stage != SKIP:
             self.send(obs,reset)
   
             obs = _model.Observation.from_dict(inputs)
@@ -581,6 +589,7 @@ class Policy(BasePolicy):
                 'state':obs.state.cpu().numpy().astype(np.float32),
                 'prompt':obs.tokenized_prompt.cpu().numpy()
             }
+            print(kvcache_result.shape)
             self.send(obs)
             recv_data = self.receive()
             action_result = self.proc_action(recv_data)
@@ -591,13 +600,13 @@ class Policy(BasePolicy):
         self.count +=1
 
         if self.stage == ACTION or self.stage == ACTION_B:
-           # print('raw action',outputs["actions"])
-          #  print('cpp action',action_result)
-          #  np.save("test/py_act.npy",np.array(outputs["actions"].detach().cpu().numpy()))
-          #  np.save("test/cpp_act.npy",np.array(action_result))
+             print('raw action',outputs["actions"])
+             print('cpp action',action_result)
+             np.save("test/py_act.npy",np.array(outputs["actions"].detach().cpu().numpy()))
+             np.save("test/cpp_act.npy",np.array(action_result))
           #  reset_filter()
           #  action_result = filter(action_result.squeeze()).unsqueeze(0)
-            outputs["actions"] = action_result
+             outputs["actions"] = action_result
 
         # Unbatch and convert to np.ndarray.
         if self._is_pytorch_model:
@@ -607,8 +616,8 @@ class Policy(BasePolicy):
 
         outputs = self._output_transform(outputs)
         if self.stage == FULL:
-         #   np.save("test/py_act.npy",np.array(outputs["actions"]))
-         #   np.save("test/cpp_act.npy",np.array(action_result))
+            np.save("test/py_act.npy",np.array(outputs["actions"]))
+            np.save("test/cpp_act.npy",np.array(action_result))
        
             outputs["actions"] = action_result.squeeze()
         
@@ -616,6 +625,7 @@ class Policy(BasePolicy):
             if reset:
                 self.reset_filter()
             outputs["actions"] = self.filt(outputs["actions"].squeeze())
+            
             
         return outputs
     @property

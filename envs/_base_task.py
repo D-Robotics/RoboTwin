@@ -104,6 +104,7 @@ class Base_Task(gym.Env):
         self.cat_dim =data['cat_dim']
         self.fresh = data['fresh']
         self.cauchy = data['cauchy']
+        self.raw_tri = data['raw_tri']
         self.hd = data['hd']
         
         # dataset config
@@ -1533,11 +1534,19 @@ class Base_Task(gym.Env):
                     self.now_obs["observation"]["cauchy_obs_camera2"]["rgb"]],
                     axis=self.cat_dim))  
                 img = concatenated_rgb
+            elif self.raw_tri:
+                concatenated_rgb = np.ascontiguousarray(np.concatenate([
+                    self.now_obs["observation"]["left_camera"]["rgb"], 
+                    self.now_obs["observation"]["head_camera"]["rgb"],
+                    self.now_obs["observation"]["right_camera"]["rgb"]],
+                    axis=self.cat_dim))  
+                img = concatenated_rgb
             else:
                 img = self.now_obs["observation"]["head_camera"]["rgb"]
             img = self.inter(img)
             if self.fresh:
                 self.show(img)
+                
             if (self.eval_video_path is not None):
                 if self.eval_video_ffmpeg_cauchy:
                     self.eval_video_ffmpeg_cauchy.stdin.write(img.tobytes())
@@ -1740,6 +1749,13 @@ class Base_Task(gym.Env):
                     concatenated_rgb = np.ascontiguousarray(np.concatenate([
                         self.now_obs["observation"]["cauchy_obs_camera1"]["rgb"], 
                         self.now_obs["observation"]["cauchy_obs_camera2"]["rgb"]],
+                        axis=self.cat_dim))  
+                    img = concatenated_rgb
+                elif self.raw_tri:
+                    concatenated_rgb = np.ascontiguousarray(np.concatenate([
+                        self.now_obs["observation"]["left_camera"]["rgb"], 
+                        self.now_obs["observation"]["head_camera"]["rgb"],
+                        self.now_obs["observation"]["right_camera"]["rgb"]],
                         axis=self.cat_dim))  
                     img = concatenated_rgb
                 else:

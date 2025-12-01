@@ -30,7 +30,7 @@ from ...processing_utils import Unpack
 from ...utils import LossKwargs, ModelOutput, auto_docstring, can_return_tuple, is_torchdynamo_compiling, logging
 from ..auto import AutoModel
 from .configuration_paligemma import PaliGemmaConfig
-
+from .utils import VisPruner
 
 logger = logging.get_logger(__name__)
 
@@ -145,6 +145,7 @@ class PaliGemmaModel(PaliGemmaPreTrainedModel):
         self.language_model = language_model
 
         self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
+        self.pruner = VisPruner(keep_ratio=144/256, training=False, random_drop=True)
         self.post_init()
 
     # Copied from transformers.models.llava.modeling_llava.LlavaModel.get_input_embeddings with Llava->PaliGemma
@@ -239,9 +240,13 @@ class PaliGemmaModel(PaliGemmaPreTrainedModel):
         Returns:
             image_features (`torch.Tensor`): Image feature tensor of shape `(num_images, image_length, embed_dim)`).
         """
-        image_outputs = self.vision_tower(pixel_values)
+        image_outputs = self.vision_tower(pixel_values, output_attentions=True)
         selected_image_feature = image_outputs.last_hidden_state
-        image_features = self.multi_modal_projector(selected_image_feature)
+        attentions = image_outputs.attentions[-1]
+
+        x_reduced, selected_idx = self.pruner.forward(selected_image_feature, attentions)
+        image_features = self.multi_modal_projector(x_reduced)
+
         return image_features
 
     @can_return_tuple
