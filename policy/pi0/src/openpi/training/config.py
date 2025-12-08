@@ -479,8 +479,9 @@ _CONFIGS = [
         batch_size=32,  # the total batch_size not pre_gpu batch_size
         weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/data/weiyang.hu/models/openpi/openpi-assets/checkpoints/pi0_base/params"),
         pytorch_weight_path="/mnt/data/weiyang.hu/models/openpi/pi0_base_pytorch",
-        num_train_steps=30000,
+        num_train_steps=50000,
         fsdp_devices=4,  # refer line 359
+        save_interval=5000,
     ),
     # pi0_fast_base by full
     TrainConfig(

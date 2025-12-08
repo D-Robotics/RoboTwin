@@ -35,6 +35,52 @@ from .configuration_paligemma import PaliGemmaConfig
 logger = logging.get_logger(__name__)
 
 
+class VisPruner:
+    def __init__(self, keep_ratio=0.5625, training=True, random_drop=True):
+        """
+        keep_ratio: float, 保留 token 比例 (e.g., 144/256 ≈ 0.5625)
+        training: bool, 是否训练阶段
+        random_drop: bool, 是否在训练阶段做随机 dropout-style
+        """
+        self.keep_ratio = keep_ratio
+        self.training = training
+        self.random_drop = random_drop
+
+    def forward(self, x, attn_weight):
+        """
+        x: [B, N, D] SigLip token embeddings
+        attn_weight: [B, H, N, N] attention weights
+        return: x_pruned [B, K, D], selected indices [B, K]
+        """
+        B, N, D = x.shape
+        K = max(1, int(self.keep_ratio * N))
+
+        # 1. compute token importance (attention mean)
+        A = attn_weight.mean(dim=1)       # [B, N, N]
+        token_scores = A.mean(dim=-1)     # [B, N]
+
+        if self.training and self.random_drop:
+            # 训练阶段随机 drop + score引导
+            # 先多选几个 token，再随机取 K 个
+            extra_k = min(N, int(K * 1.2))
+            _, topk_idx = torch.topk(token_scores, extra_k, dim=-1)
+            # 随机选择 K 个
+            idx = torch.stack([topk_idx[i, torch.randperm(extra_k)[:K]] for i in range(B)], dim=0)
+        else:
+            # 推理阶段：硬 top-k
+            _, idx = torch.topk(token_scores, K, dim=-1)
+
+        # 2. 保持原序
+        idx_sorted, _ = torch.sort(idx, dim=-1)
+
+        # 3. gather token embeddings
+        batch_idx = torch.arange(B).unsqueeze(-1).to(x.device)
+        x_pruned = x[batch_idx, idx_sorted]  # [B, K, D]
+
+        return x_pruned, idx_sorted
+
+
+
 @dataclass
 @auto_docstring(
     custom_intro="""
@@ -146,6 +192,7 @@ class PaliGemmaModel(PaliGemmaPreTrainedModel):
 
         self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
         self.post_init()
+        self.pruner = VisPruner(keep_ratio=144/256, training=True, random_drop=True)
 
     # Copied from transformers.models.llava.modeling_llava.LlavaModel.get_input_embeddings with Llava->PaliGemma
     def get_input_embeddings(self):
@@ -239,9 +286,13 @@ class PaliGemmaModel(PaliGemmaPreTrainedModel):
         Returns:
             image_features (`torch.Tensor`): Image feature tensor of shape `(num_images, image_length, embed_dim)`).
         """
-        image_outputs = self.vision_tower(pixel_values)
+        image_outputs = self.vision_tower(pixel_values, output_attentions=True)
         selected_image_feature = image_outputs.last_hidden_state
-        image_features = self.multi_modal_projector(selected_image_feature)
+        attentions = image_outputs.attentions[-1]
+
+        x_reduced, selected_idx = self.pruner.forward(selected_image_feature, attentions)
+        image_features = self.multi_modal_projector(x_reduced)
+        # print(f"------------------image features shape------------------\n{image_features.shape}")
         return image_features
 
     @can_return_tuple
