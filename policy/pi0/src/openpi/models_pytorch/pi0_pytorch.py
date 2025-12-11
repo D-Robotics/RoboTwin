@@ -14,8 +14,9 @@ import numpy as np
 import sys
 
 SAVE = False
+DEBUG = False
 
-TEST, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION, FULL, ACTION_B= range(11)
+TEST, SKIP, SIGLIP, PALIGEMMA, ACTION, FULL, ACTION_B= range(7)
 def save_kv_cache(cache_instance, save_dir):
     """
     保存 KV Cache 到指定目录
@@ -439,6 +440,10 @@ class PI0Pytorch(nn.Module):
         images, img_masks, lang_tokens, lang_masks, state = self._preprocess_observation(observation, train=False)
         
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
+        
+        if DEBUG:
+            prefix_embs.detach().cpu().to(torch.float16).numpy().tofile("test/scp/prefix.bin")
+
         prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
         prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
 
@@ -497,9 +502,11 @@ class PI0Pytorch(nn.Module):
         kv = out.squeeze()
         kv = kv.reshape(-1, *kv.shape[2:]).unsqueeze(0).detach().cpu().to(torch.float32).numpy()
         mask_np = mask.detach().cpu().numpy()
-        np.save("test/kv.npy",kv)
-        np.save("test/posid.npy", posid.detach().cpu().numpy())
-        np.save("test/mask.npy",mask_np)
+        
+        if DEBUG:
+            np.save("test/scp/kv.npy",kv)
+    #    np.save("test/posid.npy", posid.detach().cpu().numpy())
+    #    np.save("test/mask.npy",mask_np)
 
         return kv, x_t
 

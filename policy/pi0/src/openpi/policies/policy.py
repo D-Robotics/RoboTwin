@@ -20,12 +20,16 @@ import openpi.models_pytorch.preprocessing_pytorch as _preprocessing
 
 import socket
 import time
-from openpi.models import msg_pb2
 
 from safetensors.torch import load_file
 import torch.nn as nn
 import torch
 import einops
+import os
+
+from openpi.patch import msg_pb2
+from openpi.patch.filters import NoFilter, FIR, ZeroPhaseFTR, MultiChannelButterworth
+from openpi.patch.utils import dict_equal
 
 BasePolicy: TypeAlias = _base_policy.BasePolicy
 
@@ -41,78 +45,9 @@ DBG = False
 # FULL: Send obs and receive aloha action result
 
 # ACTION_B: Send ACTION_EXPERT input and receive ACTION_EXPERT result
-from scipy.signal import butter
 
-class MultiChannelButterworth:
-    def __init__(self, cutoff, fs, channels, order=2):
-        self.b, self.a = butter(order, cutoff / (0.5 * fs), btype='low')
-        self.order = order
-        self.channels = channels
-        self.x_hist = np.zeros((len(self.b), channels))
-        self.y_hist = np.zeros((len(self.a), channels))
 
-    def reset(self):
-        self.x_hist = np.zeros((len(self.b), self.channels))
-        self.y_hist = np.zeros((len(self.a), self.channels))
-        
-    def filter(self, x):
-
-        x = np.asarray(x)
-        assert x.shape == (self.channels,), f"Expected shape ({self.channels},), got {x.shape}"
-        # Shift history 
-        
-        self.x_hist[1:] = self.x_hist[:-1]
-        self.x_hist[0] = x
-
-        self.y_hist[1:] = self.y_hist[:-1]
-
-        # Compute output per channel
-        y = (self.b[:, None] * self.x_hist).sum(axis=0) - \
-            (self.a[1:, None] * self.y_hist[1:]).sum(axis=0)
-        y /= self.a[0]
-         
-        self.y_hist[0] = y
-
-        return y
-
-def dict_equal(d1, d2, atol=1e-6):
-    if not (isinstance(d1, dict) and isinstance(d2, dict)):
-        return False
-    if d1.keys() != d2.keys():
-        return False
-    for key in d1:
-        v1, v2 = d1[key], d2[key]
-        if isinstance(v1, dict) and isinstance(v2, dict):
-            if not dict_equal(v1, v2, atol=atol):
-                return False
-        elif isinstance(v1, np.ndarray):
-            v2 = np.array(v2)
-            v2 = np.squeeze(v2)
-            if v1.shape != v2.shape:
-                print(v1.shape, v2.shape)
-                return False
-            if not np.allclose(v1, v2, atol=atol):
-                with open('1.txt','w') as f:
-                    for i in range(v1.shape[0]):
-                        if not np.allclose(v1[i], v2[i], atol=atol):
-                            f.write(str(v1[i])+'\n')
-                            f.write(str(v2[i])+'\n')
-                            print(i)
-                            break
-
-                return False
-        elif isinstance(v1, (list, tuple)) and isinstance(v2, (list, tuple)):
-            if len(v1) != len(v2):
-                return False
-            for elem1, elem2 in zip(v1, v2):
-                if not dict_equal(elem1, elem2, atol=atol):
-                    return False
-        else:
-            if v1 != v2:
-                return False
-        return True
 class Policy(BasePolicy):
-
     def __init__(
         self,
         model: _model.BaseModel,
@@ -124,7 +59,7 @@ class Policy(BasePolicy):
         metadata: dict[str, Any] | None = None,
         pytorch_device: str = "cpu",
         is_pytorch: bool = False,
-        cfg = None
+        cfg=None,
     ):
         self._model = model
         self._input_transform = _transforms.compose(transforms)
@@ -148,31 +83,41 @@ class Policy(BasePolicy):
         self.seq = 0
 
         self.count = 0
-        
+
         # config
-        self.stage = cfg['stage']
-        self.port = cfg['port']
-        self.do_preproc = cfg['do_preproc']
-        self.use_raw = self.do_preproc and self.stage!=FULL
-        self.visp = cfg['visp']
-        
+        self.stage = cfg["stage"]
+        self.port = cfg["port"]
+        self.do_preproc = cfg["do_preproc"]
+        self.use_raw = self.do_preproc and self.stage != FULL
+        self.visp = cfg["visp"]
+        self.chunk = cfg["chunk"]
+        self.debug = cfg["debug"]
+        if self.debug:
+            if not os.path.exists("test"):
+                os.mkdir("test")
+            if not os.path.exists("test/scp"):
+                os.mkdir("test/scp")
         # filter
-        self.do_filt = cfg['filter']
-        fs = cfg.get("fs") or 25    # 采样率 25Hz
-        cutoff = 1    # 截止频率 5Hz
-        channels = 14  # 三通道数据（如加速度 X/Y/Z）
-        self.filter = MultiChannelButterworth(cutoff, fs, channels)
+        self.filter_type = cfg["filter"]
+        filter_keys = ["fs", "cutoff", "channels"]
+        common_params = {key: cfg.get(key) for key in filter_keys if key in cfg}
 
+        filter_zoo = [NoFilter, MultiChannelButterworth, FIR, ZeroPhaseFTR]
+        filter_class = filter_zoo[self.filter_type]
 
-    def filt(self,arr):
-        filtered = np.zeros_like(arr)
-        for i in range(arr.shape[0]):
-            filtered[i,:] = self.filter.filter(arr[i,:])
-        return filtered
+        self.filter = filter_class(**common_params)
+        self.filter_py = filter_class(**common_params)
+
+    def filt(self, arr):
+        return self.filter.filter(arr)
+
+    def filt_py(self, arr):
+        return self.filter_py.filter(arr)
 
     def reset_filter(self):
         self.filter.reset()
-    
+        self.filter_py.reset()
+
     def connect(self):
         def is_connected(sock: socket.socket) -> bool:
             if sock is None:
@@ -185,9 +130,9 @@ class Policy(BasePolicy):
 
         if is_connected(self.sock_fd):
             return
-        
+
         def listen():
-            # 1. 创建 TCP Socket（对应 C++ 的 socket(AF_INET, SOCK_STREAM, 0)）
+            # 1. 创建 TCP Socket
             try:
                 # SOCK_STREAM 表示 TCP 协议，AF_INET 表示 IPv4
                 self.listen_fd = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -196,9 +141,9 @@ class Policy(BasePolicy):
             except OSError as e:
                 print(f"创建 Socket 失败：{str(e)}")
                 return
-            
-            # 2. 绑定端口（对应 C++ 的 bind()，监听 8888 端口）
-            server_addr = ("0.0.0.0", self.port)  # 0.0.0.0 等价于 C++ 的 INADDR_ANY（监听所有网卡）
+
+            # 2. 绑定端口
+            server_addr = ("0.0.0.0", self.port)
             try:
                 self.listen_fd.bind(server_addr)
             except OSError as e:
@@ -206,7 +151,7 @@ class Policy(BasePolicy):
                 self.listen_fd.close()
                 return
 
-            # 3. 开始监听连接（对应 C++ 的 listen()，backlog=5）
+            # 3. 开始监听连接
             try:
                 self.listen_fd.listen(5)  # backlog：等待队列最大长度
                 print(f"服务器启动成功，等待客户端连接...（端口：{self.port}）")
@@ -214,20 +159,19 @@ class Policy(BasePolicy):
                 print(f"监听失败：{str(e)}")
                 self.listen_fd.close()
                 return
-        
-            # 4. 接受客户端连接（对应 C++ 的 accept()，阻塞直到有连接）
+
+            # 4. 接受客户端连接
             try:
-                # client_addr：存储客户端地址信息，addr_len：地址长度
                 self.sock_fd, client_addr = self.listen_fd.accept()
                 print(f"客户端已连接：IP={client_addr[0]}, 端口={client_addr[1]}")
             except OSError as e:
                 print(f"接受连接失败：{str(e)}")
                 self.listen_fd.close()
                 return
-            
+
         listen()
-        
-    def send(self, observation:dict, reset=False):
+
+    def send(self, observation: dict, reset=False):
         sock = self.sock_fd
         """发送多模态输入消息"""
         input_msg = msg_pb2.MultiModalInput()
@@ -236,7 +180,7 @@ class Policy(BasePolicy):
             """构建Header消息"""
             header = msg_pb2.Header()
             header.seq = seq
-    
+
             def get_current_time():
                 """获取当前时间(秒和纳秒)"""
                 current = time.time()
@@ -250,13 +194,13 @@ class Policy(BasePolicy):
             header.frame_id = "camera_optical_frame"
             header.reset = reset
             return header
-        
+
         # 设置Header
         header = build_header(self.seq)
         self.seq += 1
-        
+
         input_msg.header.CopyFrom(header)
-        
+
         img_dtypes = [msg_pb2.Tensor.UINT8, msg_pb2.Tensor.FLOAT32]
         lang_dtypes = [msg_pb2.Tensor.STRING, msg_pb2.Tensor.INT32]
         state_dtypes = [msg_pb2.Tensor.FLOAT64, msg_pb2.Tensor.FLOAT32]
@@ -268,8 +212,8 @@ class Policy(BasePolicy):
                 image.dtype = img_dtypes[self.use_raw]
                 if self.use_raw:
                     img = img.astype(jnp.float16)
-                    img = jnp.moveaxis(img,3,1)
-                    print('shape sent:',img.shape)
+                    img = jnp.moveaxis(img, 3, 1)
+                    print("shape sent:", img.shape)
                     image.dtype = msg_pb2.Tensor.FP16
                 image.shape.extend(img.shape)
                 image.data = img.tobytes()
@@ -292,8 +236,12 @@ class Policy(BasePolicy):
         language = input_msg.languages.add()
         language.dtype = lang_dtypes[self.use_raw]
         language.shape.extend(observation["prompt"].shape)
-        language.data = observation["prompt"].encode("utf-8") if not self.use_raw else observation["prompt"].astype(np.float32).tobytes()
-               
+        language.data = (
+            observation["prompt"].encode("utf-8")
+            if not self.use_raw
+            else observation["prompt"].astype(np.float32).tobytes()
+        )
+
         # 添加状态Tensor
         state = input_msg.states.add()
         state.dtype = state_dtypes[self.use_raw]
@@ -306,28 +254,24 @@ class Policy(BasePolicy):
                 # 1. 序列化 Protobuf 消息
                 serialized_data = msg.SerializeToString()
                 data_len = len(serialized_data)
-        #        print(f"待发送数据长度：{data_len}字节")
 
-                # 2. 关键：长度字段按“大端字节序”打包（与 C++ 网络序一致）
+                # 2. 关键：长度字段按大端字节序打包
                 net_len = socket.htonl(data_len)  # 主机序→网络序（大端）
                 net_len_bytes = struct.pack("<I", net_len)  # 大端打包为 4 字节
-                # 验证长度字段是否为 4 字节（必须满足）
+
                 assert len(net_len_bytes) == 4, f"长度字段应为4字节，实际{len(net_len_bytes)}字节"
 
-        #        print(f"待发送的长度字段（十六进制）：{net_len_bytes.hex()}")
                 # 3. 先发送长度，再发送数据
                 sock.sendall(net_len_bytes)  # 发送 4 字节长度
-        #        print(f"发送的长度字段（十六进制）：{net_len_bytes.hex()}")
-                
                 sock.sendall(serialized_data)  # 发送 Protobuf 数据
                 print(f"发送成功，长度：{data_len}字节\n")
                 return True
             except Exception as e:
                 print(f"发送失败：{str(e)}")
                 return False
-            
+
         send_proto_message(sock, input_msg)
-    
+
     def receive(self):
         batch = msg_pb2.MultiModalInput()
         sock = self.sock_fd
@@ -338,10 +282,8 @@ class Policy(BasePolicy):
             print(f"序列号 : {header.seq}")
             print(f"时间戳: {header.stamp.sec}.{header.stamp.nsec}")
             time_sec = header.stamp.sec + header.stamp.nsec / 1e9
-       #     print(f"（等价于 {time_sec} 秒）")
-       #     print(f"坐标系 ID (frame_id): {header.frame_id}")
-            print("====== 解析 Body 信息 ======")    
-        
+            print("====== 解析 Body 信息 ======")
+
         def recv_proto_message(sock, msg):
             """接收protobuf消息(先接收长度，再接收数据)"""
             try:
@@ -351,15 +293,13 @@ class Policy(BasePolicy):
                     print("未收到完整长度（需4字节，实际收到{}字节）".format(len(net_len_data)))
                     return False
 
-                # 关键：用 ">I"（大端）解析 4 字节无符号整数（与 C++ 的 htonl 对应）
+                # 关键：用 ">I"（大端）解析 4 字节无符号整数
                 net_len = struct.unpack("<I", net_len_data)[0]
-                # 网络序转主机序（若系统是小端，此步必须；大端系统可省略，但建议保留兼容性）
+                # 网络序转主机序（小端系统必须，大系端统可省略）
                 data_len = socket.ntohl(net_len)
 
-           #     print(f"解析到数据长度：{data_len}字节（等待接收）")  # 加日志验证长度是否合理
-
                 # 接收数据
-                serialized_data = b''
+                serialized_data = b""
                 while len(serialized_data) < data_len:
                     chunk = sock.recv(min(4096, data_len - len(serialized_data)))
                     if not chunk:
@@ -374,7 +314,7 @@ class Policy(BasePolicy):
             except Exception as e:
                 print(f"接收失败：{str(e)}")
                 return False
-            
+
         if recv_proto_message(sock, batch):
             # 解析Header
             parse_header(batch.header)
@@ -382,7 +322,7 @@ class Policy(BasePolicy):
             def parse_type(input):
                 if input.dtype == msg_pb2.Tensor.STRING:
                     arr = input.data
-                    return arr.decode('utf-8')
+                    return arr.decode("utf-8")
                 elif input.dtype == msg_pb2.Tensor.UINT8:
                     arr = np.frombuffer(input.data, dtype=np.uint8)
                 elif input.dtype == msg_pb2.Tensor.FLOAT64:
@@ -397,7 +337,7 @@ class Policy(BasePolicy):
                 return arr.reshape(input.shape)
 
             # 解析图片张量
-            imgs= []
+            imgs = []
             img_size = len(batch.images)
             print(f"接收到 {img_size} 个图像张量：")
             for i in range(img_size):
@@ -409,7 +349,7 @@ class Policy(BasePolicy):
                 imgs.append(parse_type(img))
 
             # 解析语言张量
-            langs= []
+            langs = []
             lang_size = len(batch.languages)
             print(f"接收到 {lang_size} 个嵌入张量：")
             for i in range(lang_size):
@@ -421,7 +361,7 @@ class Policy(BasePolicy):
                 langs.append(parse_type(lang))
 
             # 解析状态张量
-            states= []
+            states = []
             state_size = len(batch.states)
             print(f"接收到 {state_size} 个状态张量：")
             for i in range(state_size):
@@ -434,80 +374,79 @@ class Policy(BasePolicy):
 
             print("============================")
 
-            img_keys = [['cam_high', 'cam_left_wrist', 'cam_right_wrist'],
-                        ['base_0_rgb','left_wrist_0_rgb','right_wrist_0_rgb']]
+            img_keys = [
+                ["cam_high", "cam_left_wrist", "cam_right_wrist"],
+                ["base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb"],
+            ]
 
             obs = {}
             if imgs:
-                obs["images"]=dict(zip(img_keys[self.use_raw],imgs))
+                obs["images"] = dict(zip(img_keys[self.use_raw], imgs))
             if states:
-                obs["state"]=states[0]
+                obs["state"] = states[0]
             if langs:
-                obs["prompt"]=langs[0]
-            
+                obs["prompt"] = langs[0]
+
             return obs
-        
+
         return None
-    
-    def proc_recv(self,recv_data):
+
+    def proc_recv(self, recv_data):
         return recv_data
 
-    def proc_siglip(self,recv_data):
+    def proc_siglip(self, recv_data):
         siglip_in = recv_data["images"]
-        siglip_jax = jax.tree.map(
-            lambda x: jnp.array(x, dtype=jnp.bfloat16),
-            siglip_in
-        )
+        siglip_jax = jax.tree.map(lambda x: jnp.array(x, dtype=jnp.bfloat16), siglip_in)
         return siglip_jax
 
-    def proc_action(self,recv_data):
+    def proc_action(self, recv_data):
         if self.stage == FULL:
-            action_in = np.array(recv_data["prompt"],dtype=np.float64)
+            action_in = np.array(recv_data["prompt"], dtype=np.float64)
         else:
-            action_in = np.array(recv_data["prompt"],dtype=np.float16)
+            action_in = np.array(recv_data["prompt"], dtype=np.float16)
         if self._is_pytorch_model:
             action_jax = torch.tensor(action_in)
         else:
-            action_jax = jax.tree.map(
-                lambda x: jnp.array(x),
-                action_in
-            )
+            action_jax = jax.tree.map(lambda x: jnp.array(x), action_in)
+        action_jax = action_jax.squeeze()[: self.chunk]
         return action_jax
-    
-    def proc_paligemma(self,recv_data):
-        paligemma_in = np.array(recv_data["prompt"],dtype=np.float32)
-        paligemma_out = (paligemma_in[:18],paligemma_in[18:])
+
+    def proc_paligemma(self, recv_data):
+        paligemma_in = np.array(recv_data["prompt"], dtype=np.float32)
+        paligemma_out = (paligemma_in[:18], paligemma_in[18:])
         if self._is_pytorch_model:
             paligemma_jax = torch.tensor(paligemma_in)
-        paligemma_jax = jax.tree.map(
-            lambda x: jnp.array(x, dtype=jnp.bfloat16),
-            paligemma_out
-        )
+        paligemma_jax = jax.tree.map(lambda x: jnp.array(x, dtype=jnp.bfloat16), paligemma_out)
         return paligemma_jax
-    
+
     @override
-    def infer(self, obs: dict,reset=False, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
+    def infer(self, obs: dict, reset=False, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
         if self.stage != SKIP:
             self.connect()
 
+        if reset:
+            self.reset_filter()
+
         if self._model is None:
-            self.send(obs,reset)
+            self.send(obs, reset)
             recv_data = self.receive()
-            action_result = self.proc_action(recv_data)
-            outputs = {"actions":action_result.squeeze()}
-        #    np.save("test/cpp_act.npy",np.array(action_result))
+            action_result = self.proc_action(recv_data).squeeze()
+
+            filt_action = self.filt(action_result)
+            outputs = {"actions": filt_action}
+
             return outputs
-            
+
         siglip_result = None
         kvcache_result = None
         action_result = None
         if self.stage == OBS:
             self.send(obs)
             recv_data = self.receive()
-            obs_old = obs   
+            obs_old = obs
             obs = self.proc_recv(recv_data)
-              
-            assert dict_equal(obs,obs_old) ,"recv mismatch!"
+
+            assert dict_equal(obs, obs_old), "recv mismatch!"
         # PATCH END
 
         # Make a copy since transformations may modify the inputs in place.
@@ -531,63 +470,59 @@ class Policy(BasePolicy):
 
             if noise.ndim == 2:  # If noise is (action_horizon, action_dim), add batch dimension
                 noise = noise[None, ...]  # Make it (1, action_horizon, action_dim)
-            sample_kwargs["noise"] = noise            
+            sample_kwargs["noise"] = noise
 
-        if self.do_preproc and self.stage != ACTION_B and self.stage != SKIP:
+        if self.do_preproc and self.stage not in (ACTION_B, SKIP):
             obs = _model.Observation.from_dict(inputs)
-            obs = _preprocessing.preprocess_observation_pytorch(obs ,train=False)
-            obs = {
-                'images':obs.images,
-                'state':obs.state,
-                'prompt':obs.tokenized_prompt
-            }
+            obs = _preprocessing.preprocess_obsservation_pytorch(obs, train=False)
+            obs = {"images": obs.images, "state": obs.state, "prompt": obs.tokenized_prompt}
             if self.stage == TEST:
-                test_result_bchw= np.fromfile("/mnt/data/yanjie.shen/RoboTwin/policy/pi0/test/input.bin", dtype=np.float16).reshape(1,3,224,224)
+                test_result_bchw = np.fromfile(
+                    "/mnt/data/yanjie.shen/RoboTwin/policy/pi0/test/input.bin", dtype=np.float16
+                ).reshape(1, 3, 224, 224)
                 test_result = jnp.transpose(jnp.array(test_result_bchw), (0, 2, 3, 1))
-                print('shape_in',test_result.shape)
-                print('vector_in',test_result)
-                obs["images"]['base_0_rgb'] = test_result
-                obs["images"]['left_wrist_0_rgb'] = test_result
-                obs["images"]['right_wrist_0_rgb'] = test_result
-    
-            self.send(obs)
-            print('wait receive')
-            recv_data = self.receive()
-        
-        if not self.do_preproc and self.stage != SKIP:
-            self.send(obs,reset)
-  
-            obs = _model.Observation.from_dict(inputs)
-            obs =  _preprocessing.preprocess_observation_pytorch(obs ,train=False)
-            obs = {
-                'images':obs.images,
-                'state':obs.state,
-                'prompt':obs.tokenized_prompt
-            }   
+                print("shape_in", test_result.shape)
+                print("vector_in", test_result)
+                obs["images"]["base_0_rgb"] = test_result
+                obs["images"]["left_wrist_0_rgb"] = test_result
+                obs["images"]["right_wrist_0_rgb"] = test_result
 
-            print('wait receive')           
+            self.send(obs)
+            print("wait receive")
+            recv_data = self.receive()
+
+        if not self.do_preproc and self.stage != SKIP:
+            self.send(obs, reset)
+
+            obs = _model.Observation.from_dict(inputs)
+            obs = _preprocessing.preprocess_observation_pytorch(obs, train=False)
+            obs = {"images": obs.images, "state": obs.state, "prompt": obs.tokenized_prompt}
+
+            print("wait receive")
             recv_data = self.receive()
 
         if self.stage == OBS:
             obs_old = obs
             obs = self.proc_recv(recv_data)
-            assert dict_equal(obs,obs_old) ,"recv mismatch!"
-        elif self.stage == SIGLIP or self.stage == TEST:
+            assert dict_equal(obs, obs_old), "recv mismatch!"
+        elif self.stage in (SIGLIP, TEST):
             siglip_result = self.proc_siglip(recv_data)
         elif self.stage == PALIGEMMA:
             kvcache_result = self.proc_paligemma(recv_data)
-        elif self.stage == ACTION or self.stage == FULL:
+        elif self.stage in (ACTION, FULL):
             action_result = self.proc_action(recv_data)
 
-        kvcache_result, actions = self._sample_actions(sample_rng_or_pytorch_device, _model.Observation.from_dict(inputs), **self._sample_kwargs)
+        kvcache_result, actions = self._sample_actions(
+            sample_rng_or_pytorch_device, _model.Observation.from_dict(inputs), **self._sample_kwargs
+        )
 
         if self.stage == ACTION_B:
             obs = _model.Observation.from_dict(inputs)
-            obs =  _preprocessing.preprocess_observation_pytorch(obs ,train=False)
+            obs = _preprocessing.preprocess_observation_pytorch(obs, train=False)
             obs = {
-                'images':kvcache_result, # actually kv_cache
-                'state':obs.state.cpu().numpy().astype(np.float32),
-                'prompt':obs.tokenized_prompt.cpu().numpy()
+                "images": kvcache_result,  # actually kv_cache
+                "state": obs.state.cpu().numpy().astype(np.float32),
+                "prompt": obs.tokenized_prompt.cpu().numpy(),
             }
             print(kvcache_result.shape)
             self.send(obs)
@@ -597,16 +532,16 @@ class Policy(BasePolicy):
             "state": inputs["state"],
             "actions": actions,
         }
-        self.count +=1
+        self.count += 1
 
-        if self.stage == ACTION or self.stage == ACTION_B:
-             print('raw action',outputs["actions"])
-             print('cpp action',action_result)
-             np.save("test/py_act.npy",np.array(outputs["actions"].detach().cpu().numpy()))
-             np.save("test/cpp_act.npy",np.array(action_result))
-          #  reset_filter()
-          #  action_result = filter(action_result.squeeze()).unsqueeze(0)
-             outputs["actions"] = action_result
+        if self.stage in (ACTION, ACTION_B):
+            if self.debug:
+                print("raw action", outputs["actions"])
+                print("cpp action", action_result)
+                np.save("test/py_act.npy", np.array(outputs["actions"].detach().cpu().numpy()))
+                np.save("test/cpp_act.npy", np.array(action_result))
+
+            outputs["actions"] = action_result
 
         # Unbatch and convert to np.ndarray.
         if self._is_pytorch_model:
@@ -615,19 +550,24 @@ class Policy(BasePolicy):
             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
 
         outputs = self._output_transform(outputs)
+        act_raw = outputs["actions"].squeeze()
+
         if self.stage == FULL:
-            np.save("test/py_act.npy",np.array(outputs["actions"]))
-            np.save("test/cpp_act.npy",np.array(action_result))
-       
             outputs["actions"] = action_result.squeeze()
-        
-        if self.do_filt:
-            if reset:
-                self.reset_filter()
-            outputs["actions"] = self.filt(outputs["actions"].squeeze())
-            
-            
+            if self.debug:
+                np.save("test/scp/py_act_raw.npy", np.array(act_raw))
+                np.save("test/py_act.npy", np.array(act_raw))
+                np.save("test/cpp_act.npy", np.array(action_result))
+
+        outputs["actions"] = self.filt(outputs["actions"].squeeze())
+
+        if self.debug:
+            filted_py = self.filt_py(act_raw)
+            np.save("test/py_filt.npy", filted_py)
+            np.save("test/cpp_filt.npy", outputs["actions"])
+
         return outputs
+
     @property
     def metadata(self) -> dict[str, Any]:
         return self._metadata
