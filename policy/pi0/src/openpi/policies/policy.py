@@ -33,18 +33,13 @@ from openpi.patch.utils import dict_equal
 
 BasePolicy: TypeAlias = _base_policy.BasePolicy
 
-TEST, SKIP, OBS, SIGLIP, PALIGEMMA, ACTION, FULL, ACTION_B = range(8)
+OBS, SKIP, ACTION, FULL = range(4)
 DBG = False
 
 # SKIP: Robotwin raw procedure
-# TEST: Send local input and receive SIGLIP result(Not use)
-# OBS: Send and receive obs to test mismatch
-# SIGLIP: Send obs and receive SIGLIP result
-# PALIGEMMA: Send obs and receive PALIGEMMA result
-# ACTION: Send obs and receive ACTION_EXPERT result
-# FULL: Send obs and receive aloha action result
-
-# ACTION_B: Send ACTION_EXPERT input and receive ACTION_EXPERT result
+# OBS: Send and receive obs to test consistency
+# ACTION: Send obs and receive action_expert result(w/o postproc)
+# FULL: Send obs and receive aloha action result(w/ postproc)
 
 
 class Policy(BasePolicy):
@@ -394,11 +389,6 @@ class Policy(BasePolicy):
     def proc_recv(self, recv_data):
         return recv_data
 
-    def proc_siglip(self, recv_data):
-        siglip_in = recv_data["images"]
-        siglip_jax = jax.tree.map(lambda x: jnp.array(x, dtype=jnp.bfloat16), siglip_in)
-        return siglip_jax
-
     def proc_action(self, recv_data):
         if self.stage == FULL:
             action_in = np.array(recv_data["prompt"], dtype=np.float64)
@@ -411,14 +401,6 @@ class Policy(BasePolicy):
         action_jax = action_jax.squeeze()[: self.chunk]
         return action_jax
 
-    def proc_paligemma(self, recv_data):
-        paligemma_in = np.array(recv_data["prompt"], dtype=np.float32)
-        paligemma_out = (paligemma_in[:18], paligemma_in[18:])
-        if self._is_pytorch_model:
-            paligemma_jax = torch.tensor(paligemma_in)
-        paligemma_jax = jax.tree.map(lambda x: jnp.array(x, dtype=jnp.bfloat16), paligemma_out)
-        return paligemma_jax
-
     @override
     def infer(self, obs: dict, reset=False, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
         if self.stage != SKIP:
@@ -427,19 +409,23 @@ class Policy(BasePolicy):
         if reset:
             self.reset_filter()
 
+        # Make a copy since transformations may modify the inputs in place.
+        inputs = jax.tree.map(lambda x: x, obs)
+
+        action_result = None
         if self._model is None:
             self.send(obs, reset)
             recv_data = self.receive()
             action_result = self.proc_action(recv_data).squeeze()
-
-            filt_action = self.filt(action_result)
-            outputs = {"actions": filt_action}
-
+            if self.stage == ACTION:
+                inputs = self._input_transform(inputs)
+                outputs = {"actions": action_result, "state": inputs["state"]}
+                outputs = self._output_transform(outputs)
+            else:
+                outputs = {"actions": action_result}
+            outputs["actions"] = self.filt(outputs["actions"])
             return outputs
 
-        siglip_result = None
-        kvcache_result = None
-        action_result = None
         if self.stage == OBS:
             self.send(obs)
             recv_data = self.receive()
@@ -447,13 +433,9 @@ class Policy(BasePolicy):
             obs = self.proc_recv(recv_data)
 
             assert dict_equal(obs, obs_old), "recv mismatch!"
-        # PATCH END
-
-        # Make a copy since transformations may modify the inputs in place.
-        inputs = jax.tree.map(lambda x: x, obs)
-        inputs = self._input_transform(inputs)
 
         # Make a batch and convert to jax.Array.
+        inputs = self._input_transform(inputs)
         if not self._is_pytorch_model:
             # Make a batch and convert to jax.Array.
             inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
@@ -472,20 +454,10 @@ class Policy(BasePolicy):
                 noise = noise[None, ...]  # Make it (1, action_horizon, action_dim)
             sample_kwargs["noise"] = noise
 
-        if self.do_preproc and self.stage not in (ACTION_B, SKIP):
+        if self.do_preproc and self.stage != SKIP:
             obs = _model.Observation.from_dict(inputs)
             obs = _preprocessing.preprocess_obsservation_pytorch(obs, train=False)
             obs = {"images": obs.images, "state": obs.state, "prompt": obs.tokenized_prompt}
-            if self.stage == TEST:
-                test_result_bchw = np.fromfile(
-                    "/mnt/data/yanjie.shen/RoboTwin/policy/pi0/test/input.bin", dtype=np.float16
-                ).reshape(1, 3, 224, 224)
-                test_result = jnp.transpose(jnp.array(test_result_bchw), (0, 2, 3, 1))
-                print("shape_in", test_result.shape)
-                print("vector_in", test_result)
-                obs["images"]["base_0_rgb"] = test_result
-                obs["images"]["left_wrist_0_rgb"] = test_result
-                obs["images"]["right_wrist_0_rgb"] = test_result
 
             self.send(obs)
             print("wait receive")
@@ -505,36 +477,20 @@ class Policy(BasePolicy):
             obs_old = obs
             obs = self.proc_recv(recv_data)
             assert dict_equal(obs, obs_old), "recv mismatch!"
-        elif self.stage in (SIGLIP, TEST):
-            siglip_result = self.proc_siglip(recv_data)
-        elif self.stage == PALIGEMMA:
-            kvcache_result = self.proc_paligemma(recv_data)
         elif self.stage in (ACTION, FULL):
             action_result = self.proc_action(recv_data)
 
-        kvcache_result, actions = self._sample_actions(
+        _, action_result = self._sample_actions(
             sample_rng_or_pytorch_device, _model.Observation.from_dict(inputs), **self._sample_kwargs
         )
 
-        if self.stage == ACTION_B:
-            obs = _model.Observation.from_dict(inputs)
-            obs = _preprocessing.preprocess_observation_pytorch(obs, train=False)
-            obs = {
-                "images": kvcache_result,  # actually kv_cache
-                "state": obs.state.cpu().numpy().astype(np.float32),
-                "prompt": obs.tokenized_prompt.cpu().numpy(),
-            }
-            print(kvcache_result.shape)
-            self.send(obs)
-            recv_data = self.receive()
-            action_result = self.proc_action(recv_data)
         outputs = {
             "state": inputs["state"],
-            "actions": actions,
+            "actions": action_result,
         }
         self.count += 1
 
-        if self.stage in (ACTION, ACTION_B):
+        if self.stage == ACTION:
             if self.debug:
                 print("raw action", outputs["actions"])
                 print("cpp action", action_result)

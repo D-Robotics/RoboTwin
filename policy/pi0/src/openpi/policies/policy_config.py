@@ -12,6 +12,8 @@ from openpi.training import checkpoints as _checkpoints
 from openpi.training import config as _config
 import openpi.transforms as transforms
 
+OBS, SKIP, ACTION, FULL = range(4)
+
 def create_trained_policy(
     train_config: _config.TrainConfig,
     checkpoint_dir: pathlib.Path | str,
@@ -52,7 +54,7 @@ def create_trained_policy(
 
     # read config
     data = cfg
-    USE_CPP = data['use_cpp'] and data['stage']==6
+    USE_CPP = data['use_cpp'] and data['stage'] in (ACTION, FULL)
 
     if USE_CPP:
         print(f"No model loaded!")
