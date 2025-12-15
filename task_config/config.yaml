@@ -1,18 +1,33 @@
 # 测试相关
-sample: 4              # 样本索引
+sample: 0              # 样本索引
 rnd: false             # 是否启用随机采样，false 表示使用sample的样本
-restore: false         # 是否启用断点续测
-# 推理相关
-stage: 1              # 测试阶段 TEST=0, SKIP, OBS, PREPROC, SIGLIP, SIGLIP_PRJ, PALIGEMMA, PALIGEMMA_FULL, ACTION, ACTION_B, FULL
-use_cpp: false         # 是否仅使用端侧推理，仿真侧不执行推理（stage为FULL时可选）
+restore: true       # 是否启用断点续测
+
+# 部署相关
+stage: 6              # 测试阶段 TEST=0, SKIP, OBS, SIGLIP, PALIGEMMA, ACTION, FULL, ACTION_B
+use_cpp: true         # 是否仅使用端侧推理，仿真侧不执行推理（stage为FULL时可选）
 torch_model: "/mnt/data/yanjie.shen/RoboTwin/policy/pi0/torch_model/pi0_aloha_pytorch_shoes_demo_clean_1112"
-#"/mnt/data/yanjie.shen/RoboTwin/policy/pi0/torch_model/pi0_aloha_pytorch_hammer_demo_clean_1031"
+#torch_model: "/mnt/data/yanjie.shen/RoboTwin/policy/pi0/torch_model/pi0_aloha_pytorch_hammer_demo_clean_1031"
+#torch_model: "/mnt/data/wyh/model/pi0_aloha_pytorch_hammer_vispruner_1126"
                        # PyTorch 模型路径
-port: 8888             # 监听socket连接的端口
-filter: false           # 是否滤波
-fs: 25                 # 采样频率
+port: 8832             # 监听socket连接的端口
+
+# 滤波相关
+filter: 0              # 滤波类型：0，禁用；1：butter；2：FIR
+cutoff: 5              # 截止频率
+fs: 50                 # 采样频率
+channels: 14           # 滤波维度
+
+# 推理相关
+chunk: 50             # 每輪使用的chunk_size(max=50)
+visp: false            # 使用vispruner词汇压缩
+do_preproc: false    # 发送预处理后的OBS
+debug: false
+
 # 显示相关
 use_video: true         # 是否保存视频
 cauchy: false          # 是否使用自定义camera，在_camera_config.yaml调整分辨率，在eval_policy.py中调整角度
+raw_tri: false
 cat_dim: 1               # 拼接维度：0 竖拼，1 横拼
 fresh: 0              # 图像刷新时间，0为不显示图像
+hd: 1                 # 图像放大倍数
