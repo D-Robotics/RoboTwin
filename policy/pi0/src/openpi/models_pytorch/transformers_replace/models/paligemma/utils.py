@@ -173,7 +173,7 @@ class VisPruner:
 
         # 1. compute token importance (attention mean)
         A = attn_weight.mean(dim=1)       # [B, N, N]
-        token_scores = A.mean(dim=-1)     # [B, N]
+        token_scores = A.mean(dim=1)     # [B, N]
 
         if self.training and self.random_drop:
             # 训练阶段随机 drop + score引导
