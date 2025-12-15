@@ -95,7 +95,7 @@ def main(usr_args):
     with open(yaml_path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
-    USE_CAUCHY_CAMERA = data["cauchy"]
+    USE_SPCAM_CAMERA = data["spcam"]
     RAW_TRI = data["raw_tri"]
     CAT_DIM = data["cat_dim"]
     RESTORE = data["restore"]
@@ -156,8 +156,8 @@ def main(usr_args):
 
     if args["eval_video_log"]:
         video_save_dir = save_dir
-        if USE_CAUCHY_CAMERA:
-            camera_config = get_camera_config("Cauchy_OBS")
+        if USE_SPCAM_CAMERA:
+            camera_config = get_camera_config("Spcam_OBS")
             if CAT_DIM == 0:
                 video_size = (
                     str(camera_config["w"] * HD)
@@ -378,7 +378,7 @@ def eval_policy(
     RND = data["rnd"]
     SAMPLE = data["sample"]
     USE_VIDEO = data["use_video"]
-    USE_CAUCHY_CAMERA = data["cauchy"]
+    USE_SPCAM_CAMERA = data["spcam"]
 
     del args["left_embodiment_config"]["static_camera_list"][1]
     del args["right_embodiment_config"]["static_camera_list"][1]
@@ -392,27 +392,27 @@ def eval_policy(
             pickle.dump(TASK_ENV.test_num, f)
             pickle.dump(suc_list, f)
 
-        if USE_CAUCHY_CAMERA:
-            cauchy_obs_camera1 = {
-                "name": "cauchy_obs_camera1",
-                "type": "Cauchy_OBS",
+        if USE_SPCAM_CAMERA:
+            spcam_obs_camera1 = {
+                "name": "spcam_obs_camera1",
+                "type": "Spcam_OBS",
                 "position": [-0.032, -0.45, 1.35],
                 "forward": [0, 0.6, -0.8],
                 "left": [-1, 0, 0],
             }
-            cauchy_obs_camera2 = {
-                "name": "cauchy_obs_camera2",
-                "type": "Cauchy_OBS",
+            spcam_obs_camera2 = {
+                "name": "spcam_obs_camera2",
+                "type": "Spcam_OBS",
                 "position": [-0.5, -0.05, 1.15],  # 相机位置不变
                 "forward": [0.6, 0, -0.8],  # z 分量更负 → 向下更多
                 "left": [0, 1, 0],  # 保持 left 向量
             }
 
             args["left_embodiment_config"]["static_camera_list"].append(
-                cauchy_obs_camera1
+                spcam_obs_camera1
             )
             args["left_embodiment_config"]["static_camera_list"].append(
-                cauchy_obs_camera2
+                spcam_obs_camera2
             )
 
         if expert_check:
@@ -497,10 +497,10 @@ def eval_policy(
                         ],
                         stdin=subprocess.PIPE,
                     )
-                    if not USE_CAUCHY_CAMERA
+                    if not USE_SPCAM_CAMERA
                     else None
                 )
-                ffmpeg_cauchy = (
+                ffmpeg_spcam = (
                     subprocess.Popen(
                         [
                             #  "ffmpeg",
@@ -528,10 +528,10 @@ def eval_policy(
                         ],
                         stdin=subprocess.PIPE,
                     )
-                    if USE_CAUCHY_CAMERA
+                    if USE_SPCAM_CAMERA
                     else None
                 )
-                TASK_ENV._set_eval_video_ffmpeg(ffmpeg, ffmpeg_cauchy)
+                TASK_ENV._set_eval_video_ffmpeg(ffmpeg, ffmpeg_spcam)
         else:
             TASK_ENV._set_eval_video_ffmpeg()
 

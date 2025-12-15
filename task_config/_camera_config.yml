@@ -18,7 +18,7 @@ Large_D435:
   w: 640
   h: 480
 
-Cauchy_OBS:
+Spcam_OBS:
   fovy: 70
-  w: 480
-  h: 360
+  w: 320
+  h: 240

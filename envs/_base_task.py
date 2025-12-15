@@ -103,7 +103,7 @@ class Base_Task(gym.Env):
         data = kwags.get('cfg')
         self.cat_dim =data['cat_dim']
         self.fresh = data['fresh']
-        self.cauchy = data['cauchy']
+        self.spcam = data['spcam']
         self.raw_tri = data['raw_tri']
         self.hd = data['hd']
         
@@ -613,9 +613,9 @@ class Base_Task(gym.Env):
         self.left_joint_path = args.get("left_joint_path", [])
         self.right_joint_path = args.get("right_joint_path", [])
 
-    def _set_eval_video_ffmpeg(self, ffmpeg=None, ffmpeg_cauchy=None):
+    def _set_eval_video_ffmpeg(self, ffmpeg=None, ffmpeg_spcam=None):
         self.eval_video_ffmpeg = ffmpeg
-        self.eval_video_ffmpeg_cauchy = ffmpeg_cauchy
+        self.eval_video_ffmpeg_spcam = ffmpeg_spcam
 
     def close_env(self, clear_cache=False):
         if clear_cache:
@@ -629,10 +629,10 @@ class Base_Task(gym.Env):
             self.eval_video_ffmpeg.stdin.close()
             self.eval_video_ffmpeg.wait()
             del self.eval_video_ffmpeg
-        if self.eval_video_ffmpeg_cauchy:
-            self.eval_video_ffmpeg_cauchy.stdin.close()
-            self.eval_video_ffmpeg_cauchy.wait()
-            del self.eval_video_ffmpeg_cauchy
+        if self.eval_video_ffmpeg_spcam:
+            self.eval_video_ffmpeg_spcam.stdin.close()
+            self.eval_video_ffmpeg_spcam.wait()
+            del self.eval_video_ffmpeg_spcam
 
     def delay(self, delay_time, save_freq=None):
         render_freq = self.render_freq
@@ -1527,11 +1527,11 @@ class Base_Task(gym.Env):
             return
         eval_video_freq = 1  # fixed
         if (self.take_action_cnt % eval_video_freq == 0):
-            # save cauchy
-            if self.cauchy:
+            # save spcam
+            if self.spcam:
                 concatenated_rgb = np.ascontiguousarray(np.concatenate([
-                    self.now_obs["observation"]["cauchy_obs_camera1"]["rgb"], 
-                    self.now_obs["observation"]["cauchy_obs_camera2"]["rgb"]],
+                    self.now_obs["observation"]["spcam_obs_camera1"]["rgb"], 
+                    self.now_obs["observation"]["spcam_obs_camera2"]["rgb"]],
                     axis=self.cat_dim))  
                 img = concatenated_rgb
             elif self.raw_tri:
@@ -1548,8 +1548,8 @@ class Base_Task(gym.Env):
                 self.show(img)
                 
             if (self.eval_video_path is not None):
-                if self.eval_video_ffmpeg_cauchy:
-                    self.eval_video_ffmpeg_cauchy.stdin.write(img.tobytes())
+                if self.eval_video_ffmpeg_spcam:
+                    self.eval_video_ffmpeg_spcam.stdin.write(img.tobytes())
                 elif self.eval_video_ffmpeg:
                     self.eval_video_ffmpeg.stdin.write(img.tobytes())
         self.take_action_cnt += 1
@@ -1745,10 +1745,10 @@ class Base_Task(gym.Env):
             if self.check_success():
                 self.eval_success = True
                 self.get_obs() # update obs
-                if self.cauchy:
+                if self.spcam:
                     concatenated_rgb = np.ascontiguousarray(np.concatenate([
-                        self.now_obs["observation"]["cauchy_obs_camera1"]["rgb"], 
-                        self.now_obs["observation"]["cauchy_obs_camera2"]["rgb"]],
+                        self.now_obs["observation"]["spcam_obs_camera1"]["rgb"], 
+                        self.now_obs["observation"]["spcam_obs_camera2"]["rgb"]],
                         axis=self.cat_dim))  
                     img = concatenated_rgb
                 elif self.raw_tri:
@@ -1764,8 +1764,8 @@ class Base_Task(gym.Env):
                 if self.fresh:
                     self.show(img)
                 if (self.eval_video_path is not None):
-                    if self.eval_video_ffmpeg_cauchy:
-                        self.eval_video_ffmpeg_cauchy.stdin.write(img.tobytes())
+                    if self.eval_video_ffmpeg_spcam:
+                        self.eval_video_ffmpeg_spcam.stdin.write(img.tobytes())
                     elif self.eval_video_ffmpeg:
                         self.eval_video_ffmpeg.stdin.write(img.tobytes())
                #     plt.imsave("Robo.png",img)
