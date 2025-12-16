@@ -34,14 +34,13 @@ from .utils import VisPruner
 
 logger = logging.get_logger(__name__)
 
-import os
 import yaml
+import os
+work_dir = os.getcwd()
+with open(f'{work_dir}/task_config/config.yaml','rb') as f:
+    cfg = yaml.safe_load(f)
 
-yaml_path = f"{os.getcwd()}/task_config/config.yaml"
-with open(yaml_path, "r", encoding="utf-8") as f:
-    data = yaml.safe_load(f)
-visp = data["visp"]
-keep_ratio = 144/256 if visp else 1
+RATIO = 144/256 if cfg['visp'] else 1
 
 @dataclass
 @auto_docstring(
@@ -153,7 +152,7 @@ class PaliGemmaModel(PaliGemmaPreTrainedModel):
         self.language_model = language_model
 
         self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
-        self.pruner = VisPruner(keep_ratio=keep_ratio, training=False, random_drop=True)
+        self.pruner = VisPruner(keep_ratio=RATIO, training=False, random_drop=True)
         self.post_init()
 
     # Copied from transformers.models.llava.modeling_llava.LlavaModel.get_input_embeddings with Llava->PaliGemma
