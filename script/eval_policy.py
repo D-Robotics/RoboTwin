@@ -325,54 +325,67 @@ def eval_policy(
 
     suc_list = []
 
-    temp_restore_path = f"{args['eval_video_save_dir']}/temp.pkl"
-    # load config.yaml
+    # Load initial config
     with open(yaml_path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
-    if os.path.exists(temp_path):
-        if restore:
-            with open(temp_path, "rb") as f:
-                os.rmdir(args["eval_video_save_dir"])
-                args["eval_video_save_dir"] = pickle.load(f)
-                if not os.path.exists(args["eval_video_save_dir"]):
-                    os.mkdir(args["eval_video_save_dir"])
-                # Restore last config
-                test_yaml_path = f"{args['eval_video_save_dir']}/config.yaml"
-                if os.path.exists(test_yaml_path):
-                    with open(test_yaml_path, "r", encoding="utf-8") as g:
-                        data = yaml.safe_load(g)
-                        print(
-                            f"\033[92mRestored config from last eval:\033[0m {test_yaml_path}"
-                        )
+
+    # Handle restore logic
+    if os.path.exists(temp_path) and restore:
+        # Restore previous eval session
+        with open(temp_path, "rb") as f:
+            # Remove old directory and restore saved path
+            if os.path.exists(args["eval_video_save_dir"]):
+                if os.path.isdir(args["eval_video_save_dir"]):
+                    shutil.rmtree(args["eval_video_save_dir"])
                 else:
-                    print(
-                        f"\033[33mCould not restore last config, using current config!\033[0m"
-                    )
-                # Restore last eval status
-                temp_restore_path = f"{args['eval_video_save_dir']}/temp.pkl"
-                if os.path.exists(temp_restore_path):
-                    g = open(temp_restore_path, "rb")
-                else:
-                    g = f
-                _ = pickle.load(g)
-                now_id = pickle.load(g)
-                suc_list = pickle.load(g)
-                TASK_ENV.test_num = now_id
-                succ_seed = now_id
-                TASK_ENV.suc = len(suc_list)
-                print(
-                    f"\033[92mRestored status from last eval:\033[0m {TASK_ENV.suc}/{TASK_ENV.test_num}"
-                )
-                print(f"\033[92mCurrent success list: \033[0m{suc_list}")
-        else:
-            os.remove(temp_path)
-            print(f"\033[92mCleared last eval status and start new eval!\033[0m")
+                    os.remove(args["eval_video_save_dir"])
+            
+            args["eval_video_save_dir"] = pickle.load(f)
+            Path(args["eval_video_save_dir"]).mkdir(parents=True, exist_ok=True)
+            
+            # Restore config from previous session if available
+            test_yaml_path = os.path.join(args["eval_video_save_dir"], "config.yaml")
+            if os.path.exists(test_yaml_path):
+                with open(test_yaml_path, "r", encoding="utf-8") as config_f:
+                    data = yaml.safe_load(config_f)
+                print(f"\033[92mRestored config from last eval:\033[0m {test_yaml_path}")
+            else:
+                print(f"\033[33mCould not restore last config, using current config!\033[0m")
+            
+            # Restore eval status
+            temp_restore_path = os.path.join(args["eval_video_save_dir"], "temp.pkl")
+            if os.path.exists(temp_restore_path):
+                # Read from restored directory's temp file
+                with open(temp_restore_path, "rb") as status_f:
+                    _ = pickle.load(status_f)
+                    now_id = pickle.load(status_f)
+                    suc_list = pickle.load(status_f)
+            else:
+                # Read from current temp_path file
+                _ = pickle.load(f)
+                now_id = pickle.load(f)
+                suc_list = pickle.load(f)
+            
+            TASK_ENV.test_num = now_id
+            succ_seed = now_id
+            TASK_ENV.suc = len(suc_list)
+            print(f"\033[92mRestored status from last eval:\033[0m {TASK_ENV.suc}/{TASK_ENV.test_num}")
+            print(f"\033[92mCurrent success list: \033[0m{suc_list}")
+    elif os.path.exists(temp_path):
+        # Clear previous eval status
+        os.remove(temp_path)
+        print(f"\033[92mCleared last eval status and start new eval!\033[0m")
     else:
         print(f"\033[92mStart new eval!\033[0m")
 
-    test_yaml_path = f"{args['eval_video_save_dir']}/config.yaml"
+    # Ensure config.yaml exists in eval directory
+    test_yaml_path = os.path.join(args["eval_video_save_dir"], "config.yaml")
     if not os.path.exists(test_yaml_path):
+        Path(args["eval_video_save_dir"]).mkdir(parents=True, exist_ok=True)
         shutil.copy2(yaml_path, test_yaml_path)
+
+    # Define temp_restore_path for later use
+    temp_restore_path = os.path.join(args["eval_video_save_dir"], "temp.pkl")
 
     args["cfg"] = data
     RND = data["rnd"]

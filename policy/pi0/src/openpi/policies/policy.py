@@ -243,8 +243,6 @@ class Policy(BasePolicy):
         state_obs = observation["state"]
         if isinstance(state_obs, torch.Tensor):
            state_obs=state_obs.detach().cpu().numpy()
-        print(state_obs)
-        print(state_obs.dtype)
         state.shape.extend(state_obs.shape)
         state.data = state_obs.tobytes()
 
