@@ -13,7 +13,7 @@ from openpi.training import checkpoints as _checkpoints
 from openpi.training import config as _config
 import openpi.transforms as transforms
 
-OBS, SKIP, ACTION, FULL = range(4)
+OBS, SKIP, FULL = range(3)
 
 def create_trained_policy(
     train_config: _config.TrainConfig,
@@ -55,9 +55,13 @@ def create_trained_policy(
 
     # read config
     data = cfg
-    USE_CPP = data['use_cpp'] and data['stage'] in (ACTION, FULL)
+    stage = data['stage']
+    use_cpp = data['use_cpp'] and stage == FULL
+    do_preproc = data['do_preproc']
+    do_postproc = data['do_postproc']
+    need_norm = stage != FULL or do_preproc or do_postproc
     
-    if USE_CPP:
+    if use_cpp:
         print(f"No model loaded!")
         model = None
     elif is_pytorch:
@@ -68,7 +72,7 @@ def create_trained_policy(
         print(f"Loading model from {checkpoint_dir}/params...")
         model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
-    if norm_stats is None and model is not None:
+    if norm_stats is None and need_norm:
         # We are loading the norm stats from the checkpoint instead of the config assets dir to make sure
         # that the policy is using the same normalization stats as the original training process.
         if data_config.asset_id is None:

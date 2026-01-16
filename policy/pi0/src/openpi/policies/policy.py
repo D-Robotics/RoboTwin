@@ -33,12 +33,11 @@ from openpi.patch.utils import dict_equal
 
 BasePolicy: TypeAlias = _base_policy.BasePolicy
 
-OBS, SKIP, ACTION, FULL = range(4)
+OBS, SKIP, FULL = range(3)
 DBG = False
 
 # SKIP: Robotwin raw procedure
 # OBS: Send and receive obs to test consistency
-# ACTION: Send obs and receive action_expert result(w/o postproc)
 # FULL: Send obs and receive aloha action result(w/ postproc)
 
 
@@ -77,13 +76,11 @@ class Policy(BasePolicy):
         self.sock_fd = None
         self.seq = 0
 
-        self.count = 0
-
         # config
         self.stage = cfg["stage"]
         self.port = cfg["port"]
-        self.do_preproc = cfg["do_preproc"]
-        self.use_raw = self.do_preproc and self.stage != FULL
+        self.do_preproc = cfg["do_preproc"] and self.stage == FULL
+        self.do_postproc = cfg["do_postproc"] and self.stage == FULL
         self.visp = cfg["visp"]
         self.chunk = cfg["chunk"]
         self.debug = cfg["debug"]
@@ -204,11 +201,11 @@ class Policy(BasePolicy):
         if type(observation["images"]) is dict:
             for img in observation["images"].values():
                 image = input_msg.images.add()
-                image.dtype = img_dtypes[self.use_raw]
-                if self.use_raw:
-                    img = img.astype(jnp.float16)
-                    img = jnp.moveaxis(img, 3, 1)
-                    print("shape sent:", img.shape)
+                image.dtype = img_dtypes[self.do_preproc]
+                if self.do_preproc:
+                    if isinstance(img, torch.Tensor):
+                        img = img.detach().cpu().numpy()
+                    img = img.astype(np.float16)
                     image.dtype = msg_pb2.Tensor.FP16
                 image.shape.extend(img.shape)
                 image.data = img.tobytes()
@@ -229,19 +226,27 @@ class Policy(BasePolicy):
 
         # 添加语言Tensor
         language = input_msg.languages.add()
-        language.dtype = lang_dtypes[self.use_raw]
+        language.dtype = lang_dtypes[self.do_preproc]
         language.shape.extend(observation["prompt"].shape)
+        lang =  observation["prompt"]
+        if isinstance(lang, torch.Tensor):
+            lang = lang.detach().cpu().numpy()
         language.data = (
-            observation["prompt"].encode("utf-8")
-            if not self.use_raw
-            else observation["prompt"].astype(np.float32).tobytes()
+            lang.encode("utf-8")
+            if not self.do_preproc
+            else lang.astype(np.int32).tobytes()
         )
 
         # 添加状态Tensor
         state = input_msg.states.add()
-        state.dtype = state_dtypes[self.use_raw]
-        state.shape.extend(observation["state"].shape)
-        state.data = observation["state"].tobytes()
+        state.dtype = state_dtypes[self.do_preproc]
+        state_obs = observation["state"]
+        if isinstance(state_obs, torch.Tensor):
+           state_obs=state_obs.detach().cpu().numpy()
+        print(state_obs)
+        print(state_obs.dtype)
+        state.shape.extend(state_obs.shape)
+        state.data = state_obs.tobytes()
 
         # 发送消息
         def send_proto_message(sock: socket.socket, msg) -> bool:
@@ -267,7 +272,7 @@ class Policy(BasePolicy):
 
         send_proto_message(sock, input_msg)
 
-    def receive(self):
+    def receive(self,sent_obs=None, reset=None):
         batch = msg_pb2.MultiModalInput()
         sock = self.sock_fd
 
@@ -310,7 +315,13 @@ class Policy(BasePolicy):
                 print(f"接收失败：{str(e)}")
                 return False
 
-        if recv_proto_message(sock, batch):
+        while True:
+            if not recv_proto_message(sock, batch):
+                self.sock_fd = None
+                self.connect()
+                self.send(sent_obs, reset)
+                continue
+            
             # 解析Header
             parse_header(batch.header)
 
@@ -376,7 +387,7 @@ class Policy(BasePolicy):
 
             obs = {}
             if imgs:
-                obs["images"] = dict(zip(img_keys[self.use_raw], imgs))
+                obs["images"] = dict(zip(img_keys[self.do_preproc], imgs))
             if states:
                 obs["state"] = states[0]
             if langs:
@@ -390,16 +401,22 @@ class Policy(BasePolicy):
         return recv_data
 
     def proc_action(self, recv_data):
-        if self.stage == FULL:
-            action_in = np.array(recv_data["prompt"], dtype=np.float64)
-        else:
+        if self.do_postproc:
             action_in = np.array(recv_data["prompt"], dtype=np.float16)
+        else:
+            action_in = np.array(recv_data["prompt"], dtype=np.float64)
         if self._is_pytorch_model:
             action_jax = torch.tensor(action_in)
         else:
             action_jax = jax.tree.map(lambda x: jnp.array(x), action_in)
-        action_jax = action_jax.squeeze()[: self.chunk]
+        action_jax = action_jax.squeeze()[: self.chunk].cpu()
         return action_jax
+
+    def preprocess_inputs(self,inputs):
+        obs = _model.Observation.from_dict(inputs)
+        obs = _preprocessing.preprocess_observation_pytorch(obs, train=False)
+        obs = {"images": obs.images, "state": obs.state.to(torch.float32), "prompt": obs.tokenized_prompt}
+        return obs
 
     @override
     def infer(self, obs: dict, reset=False, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
@@ -411,31 +428,9 @@ class Policy(BasePolicy):
 
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
-
-        action_result = None
-        if self._model is None:
-            self.send(obs, reset)
-            recv_data = self.receive()
-            action_result = self.proc_action(recv_data).squeeze()
-            if self.stage == ACTION:
-                inputs = self._input_transform(inputs)
-                outputs = {"actions": action_result, "state": inputs["state"]}
-                outputs = self._output_transform(outputs)
-            else:
-                outputs = {"actions": action_result}
-            outputs["actions"] = self.filt(outputs["actions"])
-            return outputs
-
-        if self.stage == OBS:
-            self.send(obs)
-            recv_data = self.receive()
-            obs_old = obs
-            obs = self.proc_recv(recv_data)
-
-            assert dict_equal(obs, obs_old), "recv mismatch!"
-
-        # Make a batch and convert to jax.Array.
         inputs = self._input_transform(inputs)
+        
+        # Input Process For torch model
         if not self._is_pytorch_model:
             # Make a batch and convert to jax.Array.
             inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
@@ -445,6 +440,34 @@ class Policy(BasePolicy):
             inputs = jax.tree.map(lambda x: torch.from_numpy(np.array(x)).to(self._pytorch_device)[None, ...], inputs)
             sample_rng_or_pytorch_device = self._pytorch_device
 
+        # Preprocess inputs
+        preproc_inputs = self.preprocess_inputs(inputs)
+
+        sent_obs = preproc_inputs if self.do_preproc else obs
+        action_recv = None
+        
+        # Connect Mode
+        if self.stage == FULL:
+            self.send(sent_obs, reset)
+            recv_data = self.receive(sent_obs, reset)
+            action_recv = self.proc_action(recv_data)
+            # Just Return if no model loaded
+            if self._model is None:
+                outputs = {"actions": action_recv, "state": preproc_inputs["state"]}
+                outputs = jax.tree.map(lambda x: np.asarray(x.squeeze().detach().cpu()), outputs)
+                if self.do_postproc:
+                    outputs = self._output_transform(outputs)
+                outputs["actions"] = self.filt(outputs["actions"])
+                return outputs
+
+        # Test Mode
+        if self.stage == OBS:
+            self.send(obs)
+            recv_data = self.receive()
+            obs_old = obs
+            obs = self.proc_recv(recv_data)
+            assert dict_equal(obs, obs_old), "recv mismatch!"
+            
         # Prepare kwargs for sample_actions
         sample_kwargs = dict(self._sample_kwargs)
         if noise is not None:
@@ -454,71 +477,50 @@ class Policy(BasePolicy):
                 noise = noise[None, ...]  # Make it (1, action_horizon, action_dim)
             sample_kwargs["noise"] = noise
 
-        if self.do_preproc and self.stage != SKIP:
-            obs = _model.Observation.from_dict(inputs)
-            obs = _preprocessing.preprocess_obsservation_pytorch(obs, train=False)
-            obs = {"images": obs.images, "state": obs.state, "prompt": obs.tokenized_prompt}
 
-            self.send(obs)
-            print("wait receive")
-            recv_data = self.receive()
-
-        if not self.do_preproc and self.stage != SKIP:
-            self.send(obs, reset)
-
-            obs = _model.Observation.from_dict(inputs)
-            obs = _preprocessing.preprocess_observation_pytorch(obs, train=False)
-            obs = {"images": obs.images, "state": obs.state, "prompt": obs.tokenized_prompt}
-
-            print("wait receive")
-            recv_data = self.receive()
-
-        if self.stage == OBS:
-            obs_old = obs
-            obs = self.proc_recv(recv_data)
-            assert dict_equal(obs, obs_old), "recv mismatch!"
-        elif self.stage in (ACTION, FULL):
-            action_result = self.proc_action(recv_data)
-
-        _, action_result = self._sample_actions(
+        _, action_local = self._sample_actions(
             sample_rng_or_pytorch_device, _model.Observation.from_dict(inputs), **self._sample_kwargs
         )
 
-        outputs = {
+        local_outputs = {
             "state": inputs["state"],
-            "actions": action_result,
+            "actions": action_local,
         }
-        self.count += 1
-
-        if self.stage == ACTION:
-            if self.debug:
-                print("raw action", outputs["actions"])
-                print("cpp action", action_result)
-                np.save("test/py_act.npy", np.array(outputs["actions"].detach().cpu().numpy()))
-                np.save("test/cpp_act.npy", np.array(action_result))
-
-            outputs["actions"] = action_result
-
-        # Unbatch and convert to np.ndarray.
+        
         if self._is_pytorch_model:
-            outputs = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), outputs)
+            outputs_mapped = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), local_outputs)
         else:
-            outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
-
-        outputs = self._output_transform(outputs)
-        act_raw = outputs["actions"].squeeze()
-
-        if self.stage == FULL:
-            outputs["actions"] = action_result.squeeze()
+            outputs_mapped = jax.tree.map(lambda x: np.asarray(x[0, ...]), local_outputs)
+            
+        # Compare action_recv & local_action
+        action_recv = action_recv.squeeze()
+        if self.do_postproc:
             if self.debug:
-                np.save("test/scp/py_act_raw.npy", np.array(act_raw))
-                np.save("test/py_act.npy", np.array(act_raw))
-                np.save("test/cpp_act.npy", np.array(action_result))
+                print("raw action", outputs_mapped["actions"])
+                print("cpp action", action_recv)
+                np.save("test/py_act.npy", np.array(outputs_mapped["actions"]))
+                np.save("test/cpp_act.npy", np.array(action_recv))
+            outputs_mapped['actions'] = action_recv
+        
+        # Transform action
+        outputs = self._output_transform(outputs_mapped)
+        action_raw = outputs["actions"]
 
-        outputs["actions"] = self.filt(outputs["actions"].squeeze())
+        # Compare action_recv & transformed action
+        if self.stage == FULL:
+            if not self.do_postproc:
+                outputs["actions"] = action_recv
+                if self.debug:
+                    print(action_raw)
+                    print(action_recv)
+                    np.save("test/scp/py_act_raw.npy", np.array(action_raw))
+                    np.save("test/py_act.npy", np.array(action_raw))
+                    np.save("test/cpp_act.npy", np.array(action_recv))
 
+        # Filter
+        outputs["actions"] = self.filt(outputs["actions"])
         if self.debug:
-            filted_py = self.filt_py(act_raw)
+            filted_py = self.filt_py(action_raw)
             np.save("test/py_filt.npy", filted_py)
             np.save("test/cpp_filt.npy", outputs["actions"])
 

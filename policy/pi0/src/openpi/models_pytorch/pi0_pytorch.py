@@ -251,12 +251,18 @@ class PI0Pytorch(nn.Module):
         att_masks = []
 
         # Process images
+        img_idx = 0
         for img, img_mask in zip(images, img_masks, strict=True):
 
             def image_embed_func(img):
                 return self.paligemma_with_expert.embed_image(img)
 
             img_emb = self._apply_checkpoint(image_embed_func, img)
+            if SAVE:
+                npy_save_path = f"wyh/siglip/{self.save_index}/"
+                os.makedirs(npy_save_path, exist_ok=True)
+                np.save(os.path.join(npy_save_path, f"img_{img_idx}.npy"), img.detach().cpu().to(torch.float32).numpy())
+                np.save(os.path.join(npy_save_path, f"img_emb_{img_idx}.npy"), img_emb.detach().cpu().to(torch.float32).numpy())
 
             bsize, num_img_embs = img_emb.shape[:2]
 

@@ -4,11 +4,11 @@ rnd: false             # 是否启用随机采样，false 表示使用sample的�
 restore: false       # 是否启用断点续测
 
 # 部署相关
-stage: 3              # 测试阶段 OBS=0, SKIP, ACTION, FULL
+stage: 2              # 测试阶段 OBS=0, SKIP, FULL
 use_cpp: true         # 是否仅使用端侧推理，仿真侧不执行推理（stage为FULL时可选）
 torch_model: "policy/pi0/torch_model/pi0_aloha_pytorch_hammer_vispruner_1126"
                        # PyTorch 模型路径
-port: 8888             # 监听socket连接的端口
+port: 30001             # 监听socket连接的端口
 
 # 滤波相关
 filter:  0             # 滤波类型：0，禁用；1：ButterWorth；2：FIR；3：ZeroPhase
@@ -20,6 +20,7 @@ channels: 14           # 滤波维度
 chunk: 50             # 每輪使用的chunk_size(max=50)
 visp: true            # 使用vispruner词汇压缩
 do_preproc: false      # 发送预处理后的OBS
+do_postproc: false     # 对ACTION后处理
 debug: false
 
 # 显示相关
