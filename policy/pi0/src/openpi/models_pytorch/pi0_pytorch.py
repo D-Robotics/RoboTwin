@@ -142,7 +142,7 @@ class PI0Pytorch(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.pi05 = False
+        self.pi05 = config.pi05
         self.save_index = 0
 
         paligemma_config = _gemma.get_config(config.paligemma_variant)

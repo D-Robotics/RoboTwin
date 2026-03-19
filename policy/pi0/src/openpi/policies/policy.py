@@ -205,8 +205,8 @@ class Policy(BasePolicy):
                 if self.do_preproc:
                     if isinstance(img, torch.Tensor):
                         img = img.detach().cpu().numpy()
-                    img = img.astype(np.float16)
-                    image.dtype = msg_pb2.Tensor.FP16
+                    img = img.astype(np.float32)
+                    image.dtype = msg_pb2.Tensor.FLOAT32
                 image.shape.extend(img.shape)
                 image.data = img.tobytes()
         else:
@@ -491,7 +491,8 @@ class Policy(BasePolicy):
             outputs_mapped = jax.tree.map(lambda x: np.asarray(x[0, ...]), local_outputs)
             
         # Compare action_recv & local_action
-        action_recv = action_recv.squeeze()
+        if action_recv is not None:
+            action_recv = action_recv.squeeze()
         if self.do_postproc:
             if self.debug:
                 print("raw action", outputs_mapped["actions"])
