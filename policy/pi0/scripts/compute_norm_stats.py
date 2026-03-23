@@ -4,6 +4,9 @@ This script is used to compute the normalization statistics for a given config. 
 will compute the mean and standard deviation of the data in the dataset and save it
 to the config assets directory.
 """
+# 仅做归一化统计，用 CPU 即可；避免 JAX 使用环境内过旧的 ptxas 导致 CUDA 编译失败
+import os
+os.environ["JAX_PLATFORMS"] = "cpu"
 
 import numpy as np
 import tqdm

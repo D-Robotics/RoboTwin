@@ -1,6 +1,8 @@
 import logging
 import math
+import os
 
+import numpy as np
 import torch
 from torch import Tensor
 from torch import nn
@@ -9,39 +11,39 @@ import torch.nn.functional as F  # noqa: N812
 import openpi.models.gemma as _gemma
 from openpi.models_pytorch.gemma_pytorch import PaliGemmaWithExpertModel
 import openpi.models_pytorch.preprocessing_pytorch as _preprocessing
-import numpy as np
-import sys
-import os
+
+
 def save_kv_cache(cache_instance, save_dir):
     """
     保存 KV Cache 到指定目录
     """
     os.makedirs(save_dir, exist_ok=True)
-    
+
     # 检查缓存结构
-    if hasattr(cache_instance, 'key_cache') and hasattr(cache_instance, 'value_cache'):
+    if hasattr(cache_instance, "key_cache") and hasattr(cache_instance, "value_cache"):
         key_cache = cache_instance.key_cache
         value_cache = cache_instance.value_cache
-        
+
         # 假设是列表形式，每层一个张量
         if isinstance(key_cache, list) and isinstance(value_cache, list):
             for layer_idx in range(len(key_cache)):
                 # 将张量转换为 numpy 数组
                 key_np = key_cache[layer_idx].to(torch.float32).detach().cpu().numpy()
                 value_np = value_cache[layer_idx].to(torch.float32).detach().cpu().numpy()
-                
+
                 # 保存为 .npy 文件
-                np.save(os.path.join(save_dir, f'key_cache_layer_{layer_idx}.npy'), key_np)
-                np.save(os.path.join(save_dir, f'value_cache_layer_{layer_idx}.npy'), value_np)
-                
+                np.save(os.path.join(save_dir, f"key_cache_layer_{layer_idx}.npy"), key_np)
+                np.save(os.path.join(save_dir, f"value_cache_layer_{layer_idx}.npy"), value_np)
+
                 print(f"Saved layer {layer_idx}: key {key_np.shape}, value {value_np.shape}")
-        
+
         # 如果是其他结构，需要根据具体实现调整
         else:
             print("Unexpected cache structure")
-    
+
     else:
         print("Cache instance doesn't have key_cache and value_cache attributes")
+
 
 # Debug prints for state, x_t, timestep
 def _debug_print(name, x):
@@ -62,7 +64,8 @@ def _debug_print(name, x):
             print(f"{name}: type={type(x)}, value={x}")
     except Exception as e:
         print(f"{name}: failed to print ({e})")
-        
+
+
 def get_safe_dtype(target_dtype, device_type):
     """Get a safe dtype for the given device type."""
     if device_type == "cpu":
@@ -137,7 +140,8 @@ class PI0Pytorch(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.pi05 = False
+        self.pi05 = config.pi05
+        print(f"pi05: {self.pi05}")
         self.save_index = 0
 
         paligemma_config = _gemma.get_config(config.paligemma_variant)
@@ -247,12 +251,18 @@ class PI0Pytorch(nn.Module):
         att_masks = []
 
         # Process images
+        # ii = 0
         for img, img_mask in zip(images, img_masks, strict=True):
 
             def image_embed_func(img):
                 return self.paligemma_with_expert.embed_image(img)
 
+            # np.save(os.path.join(npy_save_path, f"image_embed_input_{ii}.npy"), img.detach().cpu().numpy())
             img_emb = self._apply_checkpoint(image_embed_func, img)
+            # np.save(
+            #     os.path.join(npy_save_path, f"image_embed_output_{ii}.npy"),
+            #     img_emb.to(torch.float32).detach().cpu().numpy(),
+            # )
 
             bsize, num_img_embs = img_emb.shape[:2]
 
@@ -261,6 +271,7 @@ class PI0Pytorch(nn.Module):
 
             # Create attention masks so that image tokens attend to each other
             att_masks += [0] * num_img_embs
+            # ii += 1
 
         # Process language tokens
         def lang_embed_func(lang_tokens):
@@ -428,7 +439,8 @@ class PI0Pytorch(nn.Module):
     @torch.no_grad()
     def sample_actions(self, device, observation, noise=None, num_steps=10) -> Tensor:
         """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
-        npy_save_path = f"/mnt/data/weiyang.hu/RoboTwin-main/gemma_expert_npy_calibration_1112/{self.save_index}/"
+        # npy_save_path = f"/mnt/data/weiyang.hu/RoboTwin-main/gemma_expert_npy_calibration_0320/{self.save_index}/"
+        # os.makedirs(npy_save_path, exist_ok=True)
         bsize = observation.state.shape[0]
         if noise is None:
             actions_shape = (bsize, self.config.action_horizon, self.config.action_dim)
@@ -436,7 +448,10 @@ class PI0Pytorch(nn.Module):
 
         images, img_masks, lang_tokens, lang_masks, state = self._preprocess_observation(observation, train=False)
 
-        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
+        # np.save(os.path.join(npy_save_path, "lang_tokens.npy"), torch.tensor(lang_tokens).detach().cpu().numpy())
+        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
+            images, img_masks, lang_tokens, lang_masks
+        )
         prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
         prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
 
@@ -444,6 +459,12 @@ class PI0Pytorch(nn.Module):
         prefix_att_2d_masks_4d = self._prepare_attention_masks_4d(prefix_att_2d_masks)
         self.paligemma_with_expert.paligemma.language_model.config._attn_implementation = "eager"  # noqa: SLF001
 
+        # np.save(
+        #     os.path.join(npy_save_path, "prefix_att_2d_masks_4d.npy"),
+        #     prefix_att_2d_masks_4d.to(torch.float32).detach().cpu().numpy(),
+        # )
+        # np.save(os.path.join(npy_save_path, "prefix_embs.npy"), prefix_embs.to(torch.float32).detach().cpu().numpy())
+        # np.save(os.path.join(npy_save_path, "prefix_position_ids.npy"), prefix_position_ids.detach().cpu().numpy())
         _, past_key_values = self.paligemma_with_expert.forward(
             attention_mask=prefix_att_2d_masks_4d,
             position_ids=prefix_position_ids,
@@ -452,25 +473,21 @@ class PI0Pytorch(nn.Module):
             use_cache=True,
         )
 
-
         dt = -1.0 / num_steps
         dt = torch.tensor(dt, dtype=torch.float32, device=device)
 
         x_t = noise
         time = torch.tensor(1.0, dtype=torch.float32, device=device)
-        
+
         # print("Saving to:", npy_save_path)
         # save_kv_cache(past_key_values, npy_save_path)
         # _debug_print("state", state)
         # _debug_print("x_t", x_t)
         # np.save(os.path.join(npy_save_path, "x_t.npy"), x_t.detach().cpu().numpy())
         # np.save(os.path.join(npy_save_path, "state.npy"), state.detach().cpu().numpy())
-        # np.save(os.path.join(npy_save_path, "prefix_embs.npy"), prefix_embs.to(torch.float32).detach().cpu().numpy())
-        # np.save(os.path.join(npy_save_path, "prefix_att_2d_masks_4d.npy"), prefix_att_2d_masks_4d.to(torch.float32).detach().cpu().numpy())
-        # np.save(os.path.join(npy_save_path, "lang_tokens.npy"), torch.tensor(lang_tokens).detach().cpu().numpy())
         # np.save(os.path.join(npy_save_path, "llm_output.npy"), _[0].to(torch.float32).detach().cpu().numpy())
-        # count = 0
-        
+        count = 0
+
         while time >= -dt / 2:
             expanded_time = time.expand(bsize)
             v_t, mask, posid = self.denoise_step(
@@ -483,14 +500,15 @@ class PI0Pytorch(nn.Module):
 
             # Euler step - use new tensor assignment instead of in-place operation
             # np.save(os.path.join(npy_save_path, f"v_t_time_{count}.npy"), v_t.detach().cpu().numpy())
-            # np.save(os.path.join(npy_save_path, f"mask_time_{count}.npy"), mask.detach().cpu().numpy())
-            # np.save(os.path.join(npy_save_path, f"posid_time_{count}.npy"), posid.detach().cpu().numpy())
+
             # Euler step - use new tensor assignment instead of in-place operation
             x_t = x_t + dt * v_t
             # np.save(os.path.join(npy_save_path, f"x_t_time_{count}.npy"), x_t.detach().cpu().numpy())
-            # count += 1
+            # np.save(os.path.join(npy_save_path, f"mask_time_{count}.npy"), mask.detach().cpu().numpy())
+            # np.save(os.path.join(npy_save_path, f"posid_time_{count}.npy"), posid.detach().cpu().numpy())
+            count += 1
             time += dt
-        # self.save_index += 1
+        self.save_index += 1
         return x_t
 
     def denoise_step(
@@ -529,6 +547,10 @@ class PI0Pytorch(nn.Module):
         # Prepare attention masks
         full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
         self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"  # noqa: SLF001
+
+        # np.save(os.path.join(npy_save_path, f"mask_time_{count}.npy"), full_att_2d_masks_4d.detach().cpu().numpy())
+        # np.save(os.path.join(npy_save_path, f"posid_time_{count}.npy"), position_ids.detach().cpu().numpy())
+
 
         outputs_embeds, _ = self.paligemma_with_expert.forward(
             attention_mask=full_att_2d_masks_4d,

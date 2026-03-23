@@ -192,7 +192,7 @@ class PaliGemmaModel(PaliGemmaPreTrainedModel):
 
         self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
         self.post_init()
-        self.pruner = VisPruner(keep_ratio=144/256, training=True, random_drop=True)
+        self.pruner = VisPruner(keep_ratio=136/256, training=True, random_drop=True)
 
     # Copied from transformers.models.llava.modeling_llava.LlavaModel.get_input_embeddings with Llava->PaliGemma
     def get_input_embeddings(self):

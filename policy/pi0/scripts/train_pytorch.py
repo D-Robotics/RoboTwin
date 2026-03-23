@@ -31,6 +31,7 @@ import platform
 import shutil
 import time
 
+import bitsandbytes as bnb
 import jax
 import numpy as np
 import safetensors.torch
@@ -454,8 +455,8 @@ def train_loop(config: _config.TrainConfig):
     decay_steps = config.lr_schedule.decay_steps
     end_lr = config.lr_schedule.decay_lr
 
-    # Create optimizer with config parameters
-    optim = torch.optim.AdamW(
+    # Create 8-bit optimizer to reduce memory (~11 GB savings vs fp32 Adam states)
+    optim = bnb.optim.AdamW8bit(
         model.parameters(),
         lr=peak_lr,
         betas=(config.optimizer.b1, config.optimizer.b2),
@@ -494,7 +495,7 @@ def train_loop(config: _config.TrainConfig):
             f"LR schedule: warmup={warmup_steps}, peak_lr={peak_lr:.2e}, decay_steps={decay_steps}, end_lr={end_lr:.2e}"
         )
         logging.info(
-            f"Optimizer: {type(config.optimizer).__name__}, weight_decay={config.optimizer.weight_decay}, clip_norm={config.optimizer.clip_gradient_norm}"
+            f"Optimizer: AdamW8bit, weight_decay={config.optimizer.weight_decay}, clip_norm={config.optimizer.clip_gradient_norm}"
         )
         logging.info("EMA is not supported for PyTorch training")
         logging.info(f"Training precision: {model_cfg.dtype}")

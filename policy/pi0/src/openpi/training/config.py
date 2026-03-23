@@ -106,7 +106,7 @@ class ModelTransformFactory(GroupFactory):
 
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
         match model_config.model_type:
-            case _model.ModelType.PI0:
+            case _model.ModelType.PI0 | _model.ModelType.PI05:
                 return _transforms.Group(inputs=[
                     _transforms.InjectDefaultPrompt(self.default_prompt),
                     _transforms.ResizeImages(224, 224),
@@ -483,7 +483,106 @@ _CONFIGS = [
         fsdp_devices=4,  # refer line 359
         save_interval=5000,
     ),
+    TrainConfig(
+        name="pi05_base_aloha_robotwin_full",
+        model=pi0.Pi0Config(pi05=True),
+        data=LeRobotAlohaDataConfig(
+            repo_id="demo_clean_repo",  # your datasets repo_id
+            adapt_to_pi=False,
+            repack_transforms=_transforms.Group(inputs=[
+                _transforms.RepackTransform({
+                    "images": {
+                        "cam_high": "observation.images.cam_high",
+                        "cam_left_wrist": "observation.images.cam_left_wrist",
+                        "cam_right_wrist": "observation.images.cam_right_wrist",
+                    },
+                    "state": "observation.state",
+                    "actions": "action",
+                    "prompt": "prompt",
+                })
+            ]),
+            base_config=DataConfig(
+                local_files_only=True,  # Set to True for local-only datasets.
+                prompt_from_task=True,  # Set to True for prompt by task_name
+            ),
+        ),
+        freeze_filter=pi0.Pi0Config(pi05=True).get_freeze_filter(),
+        batch_size=32,  # the total batch_size not pre_gpu batch_size
+        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/data/weiyang.hu/models/openpi/openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="/mnt/data/weiyang.hu/models/openpi/pi05_base_pytorch",
+        num_train_steps=50000,
+        fsdp_devices=4,  # refer line 359
+        save_interval=5000,
+    ),
+    # pi05_base by lora（只训 LoRA，显存更省）
+    TrainConfig(
+        name="pi05_base_aloha_robotwin_lora",
+        model=pi0.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ),
+        data=LeRobotAlohaDataConfig(
+            repo_id="demo_clean_repo",
+            adapt_to_pi=False,
+            repack_transforms=_transforms.Group(inputs=[
+                _transforms.RepackTransform({
+                    "images": {
+                        "cam_high": "observation.images.cam_high",
+                        "cam_left_wrist": "observation.images.cam_left_wrist",
+                        "cam_right_wrist": "observation.images.cam_right_wrist",
+                    },
+                    "state": "observation.state",
+                    "actions": "action",
+                    "prompt": "prompt",
+                })
+            ]),
+            base_config=DataConfig(
+                local_files_only=True,
+                prompt_from_task=True,
+            ),
+        ),
+        freeze_filter=pi0.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+        ).get_freeze_filter(),
+        batch_size=32,
+        weight_loader=weight_loaders.CheckpointWeightLoader("/mnt/data/weiyang.hu/models/openpi/openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="/mnt/data/weiyang.hu/models/openpi/pi05_base_pytorch",
+        num_train_steps=50000,
+        fsdp_devices=4,
+        save_interval=5000,
+    ),
     # pi0_fast_base by full
+    TrainConfig(
+        name="pi0_droid",
+        model=pi0.Pi0Config(action_horizon=10),
+        data=SimpleDataConfig(
+            assets=AssetsConfig(asset_id="droid"),
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[droid_policy.DroidInputs(action_dim=model.action_dim, model_type=ModelType.PI0)],
+                outputs=[droid_policy.DroidOutputs()],
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+        ),
+    ),
+    TrainConfig(
+        name="pi05_droid",
+        model=pi0.Pi0Config(action_horizon=15, pi05=True),
+        data=SimpleDataConfig(
+            assets=AssetsConfig(asset_id="droid"),
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[droid_policy.DroidInputs(action_dim=model.action_dim, model_type=ModelType.PI05)],
+                outputs=[droid_policy.DroidOutputs()],
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+        ),
+    ),
     TrainConfig(
         name="pi0_fast_aloha_robotwin_full",
         model=pi0_fast.Pi0FASTConfig(),
