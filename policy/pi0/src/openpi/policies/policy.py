@@ -71,7 +71,8 @@ class Policy(BasePolicy):
                 # JAX model setup
                 self._sample_actions = nnx_utils.module_jit(model.sample_actions)
                 self._rng = rng or jax.random.key(0)
-
+        else:
+            self._is_pytorch_model=True
         self.listen_fd = None
         self.sock_fd = None
         self.seq = 0
