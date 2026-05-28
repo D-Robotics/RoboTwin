@@ -251,7 +251,7 @@ def main(usr_args):
 
     st_seed = 100000 * (1 + seed)
     suc_nums = []
-    test_num = 100
+    test_num = data.get("test_num", 100)
     topk = 1
 
     usr_args["cfg"] = data

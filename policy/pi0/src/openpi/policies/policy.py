@@ -111,60 +111,74 @@ class Policy(BasePolicy):
         self.filter.reset()
         self.filter_py.reset()
 
-    def connect(self):
-        def is_connected(sock: socket.socket) -> bool:
-            if sock is None:
-                return False
+    def _close_socket(self, sock: socket.socket | None) -> None:
+        if sock is not None:
             try:
-                sock.getpeername()  # 如果未连接，会抛异常
-                return True
-            except socket.error:
-                return False
+                sock.close()
+            except OSError:
+                pass
 
-        if is_connected(self.sock_fd):
+    def disconnect(self) -> None:
+        self._close_socket(self.sock_fd)
+        self._close_socket(self.listen_fd)
+        self.sock_fd = None
+        self.listen_fd = None
+
+    def _is_connected(self, sock: socket.socket | None) -> bool:
+        if sock is None:
+            return False
+        try:
+            sock.getpeername()
+            return True
+        except OSError:
+            return False
+
+    def connect(self):
+        if self._is_connected(self.sock_fd):
             return
 
-        def listen():
-            # 1. 创建 TCP Socket
-            try:
-                # SOCK_STREAM 表示 TCP 协议，AF_INET 表示 IPv4
-                self.listen_fd = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                # 设置端口复用（避免 TIME_WAIT 导致端口无法重启，对应 C++ 的 SO_REUSEADDR）
-                self.listen_fd.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            except OSError as e:
-                print(f"创建 Socket 失败：{str(e)}")
-                return
+        self.disconnect()
 
-            # 2. 绑定端口
-            server_addr = ("0.0.0.0", self.port)
-            try:
-                self.listen_fd.bind(server_addr)
-            except OSError as e:
-                print(f"绑定端口失败：{str(e)}")
-                self.listen_fd.close()
-                return
+        # 1. 创建 TCP Socket
+        try:
+            self.listen_fd = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.listen_fd.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        except OSError as e:
+            print(f"创建 Socket 失败：{str(e)}")
+            return
 
-            # 3. 开始监听连接
-            try:
-                self.listen_fd.listen(5)  # backlog：等待队列最大长度
-                print(f"服务器启动成功，等待客户端连接...（端口：{self.port}）")
-            except OSError as e:
-                print(f"监听失败：{str(e)}")
-                self.listen_fd.close()
-                return
+        # 2. 绑定端口
+        server_addr = ("0.0.0.0", self.port)
+        try:
+            self.listen_fd.bind(server_addr)
+        except OSError as e:
+            print(f"绑定端口失败：{str(e)}")
+            self.disconnect()
+            return
 
-            # 4. 接受客户端连接
-            try:
-                self.sock_fd, client_addr = self.listen_fd.accept()
-                print(f"客户端已连接：IP={client_addr[0]}, 端口={client_addr[1]}")
-            except OSError as e:
-                print(f"接受连接失败：{str(e)}")
-                self.listen_fd.close()
-                return
+        # 3. 开始监听连接
+        try:
+            self.listen_fd.listen(5)
+            print(f"服务器启动成功，等待客户端连接...（端口：{self.port}）")
+        except OSError as e:
+            print(f"监听失败：{str(e)}")
+            self.disconnect()
+            return
 
-        listen()
+        # 4. 接受客户端连接
+        try:
+            self.sock_fd, client_addr = self.listen_fd.accept()
+            print(f"客户端已连接：IP={client_addr[0]}, 端口={client_addr[1]}")
+        except OSError as e:
+            print(f"接受连接失败：{str(e)}")
+            self.disconnect()
+            return
 
-    def send(self, observation: dict, reset=False):
+        # 单客户端模式：accept 后关闭 listen fd，避免重连时泄漏
+        self._close_socket(self.listen_fd)
+        self.listen_fd = None
+
+    def send(self, observation: dict, reset=False) -> bool:
         sock = self.sock_fd
         """发送多模态输入消息"""
         input_msg = msg_pb2.MultiModalInput()
@@ -269,12 +283,9 @@ class Policy(BasePolicy):
                 print(f"发送失败：{str(e)}")
                 return False
 
-        send_proto_message(sock, input_msg)
+        return send_proto_message(sock, input_msg)
 
-    def receive(self,sent_obs=None, reset=None):
-        batch = msg_pb2.MultiModalInput()
-        sock = self.sock_fd
-
+    def receive(self, sent_obs=None, reset=None):
         def parse_header(header):
             """解析并打印Header信息"""
             print("===== 解析 Header 信息 =====")
@@ -315,12 +326,30 @@ class Policy(BasePolicy):
                 return False
 
         while True:
-            if not recv_proto_message(sock, batch):
-                self.sock_fd = None
+            if self.sock_fd is None:
                 self.connect()
-                self.send(sent_obs, reset)
+                if self.sock_fd is None:
+                    time.sleep(0.5)
+                    continue
+                if sent_obs is not None and not self.send(sent_obs, reset):
+                    self.disconnect()
+                    time.sleep(0.5)
+                    continue
+
+            batch = msg_pb2.MultiModalInput()
+            if not recv_proto_message(self.sock_fd, batch):
+                print("连接异常，等待客户端重连...")
+                self.disconnect()
+                self.connect()
+                if self.sock_fd is None:
+                    time.sleep(0.5)
+                    continue
+                if sent_obs is not None and not self.send(sent_obs, reset):
+                    self.disconnect()
+                    time.sleep(0.5)
+                    continue
                 continue
-            
+
             # 解析Header
             parse_header(batch.header)
 
