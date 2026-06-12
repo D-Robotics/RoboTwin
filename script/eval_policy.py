@@ -6,10 +6,7 @@ sys.path.append("./")
 sys.path.append(f"./policy")
 sys.path.append("./description/utils")
 
-os.environ["TORCHDYNAMO_DISABLE"] = "1"
-# os.environ["TORCH_COMPILE_DISABLE"] = "1"
-# 可选，确保不会触发 triton 检查
-# os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+# TORCHDYNAMO_DISABLE 延后到加载 pi0 模型前设置，避免干扰 curobo 的 torch.compile
 
 from envs import CONFIGS_PATH
 from envs.utils.create_actor import UnStableError
@@ -262,6 +259,7 @@ def main(usr_args):
     topk = 1
 
     usr_args["cfg"] = data
+    os.environ["TORCHDYNAMO_DISABLE"] = "1"
     model = get_model(usr_args)
     temp_path = f"{Path(save_dir).parent}/temp.pkl"
     st_seed, suc_num, suc_list = eval_policy(
