@@ -1,0 +1,21 @@
+# Offline frame inference config for policy/pi0/scripts/infer_from_frames.py
+
+# Input / output paths
+frames_dir: /home/yanjie.shen/RoboTwin/eval_result/beat_block_hammer/pi0/demo_clean/demo_clean/gt
+output_dir: /home/yanjie.shen/pi0_frame_actions
+
+# Model
+train_config_name: pi05_base_aloha_robotwin_full
+model_path: /mnt/data/llm_model_zoo/pi0/pi05_aloha_pytorch_hammer_0310
+robotwin_repo_id: demo_clean  # norm stats id under checkpoint assets, e.g. demo_clean_repo
+
+# Inference options (aligned with task_config/config.yaml)
+preproc: false
+postproc: false
+torch_compile: false  # false: skip max-autotune warmup on first frame (recommended offline)
+pi0_step: 50
+device: null  # null -> auto (cuda if available)
+state_dim: 14
+
+# Optional: only run one episode folder, e.g. episode0
+episode: null

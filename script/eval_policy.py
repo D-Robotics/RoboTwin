@@ -192,6 +192,13 @@ def main(usr_args):
         video_save_dir.mkdir(parents=True, exist_ok=True)
         args["eval_video_save_dir"] = video_save_dir
 
+    if data.get("save_frame", False) and args.get("eval_video_save_dir") is None:
+        save_dir.mkdir(parents=True, exist_ok=True)
+        args["eval_video_save_dir"] = save_dir
+
+    if args.get("eval_video_save_dir") is not None:
+        data["eval_video_save_dir"] = str(args["eval_video_save_dir"])
+
     # output camera config
     print("============= Config =============\n")
     print(

@@ -26,6 +26,7 @@ import torch.nn as nn
 import torch
 import einops
 import os
+from PIL import Image
 
 from openpi.patch import msg_pb2
 from openpi.patch.filters import NoFilter, FIR, ZeroPhaseFTR, MultiChannelButterworth
@@ -85,6 +86,13 @@ class Policy(BasePolicy):
         self.visp = cfg["visp"]
         self.chunk = cfg["chunk"]
         self.debug = cfg["debug"]
+        self.save_frame = cfg.get("save_frame", False)
+        self.save_all_frames = cfg.get("save_all_frames", False)
+        self.frame_save_dir = cfg.get("eval_video_save_dir")
+        self._frame_episode_idx = 0
+        self._frame_idx = 0
+        self._frame_episode_dir: pathlib.Path | None = None
+        self._frame_save_started = False
         if self.debug:
             if not os.path.exists("test"):
                 os.mkdir("test")
@@ -446,6 +454,61 @@ class Policy(BasePolicy):
         obs = {"images": obs.images, "state": obs.state.to(torch.float32), "prompt": obs.tokenized_prompt}
         return obs
 
+    def _to_numpy(self, value: Any) -> np.ndarray:
+        if isinstance(value, torch.Tensor):
+            return value.detach().cpu().numpy()
+        return np.asarray(value)
+
+    def _save_image_jpg(self, image: Any, path: pathlib.Path) -> None:
+        arr = self._to_numpy(image)
+        if arr.ndim == 3 and arr.shape[0] in (1, 3, 4):
+            arr = np.transpose(arr, (1, 2, 0))
+        if arr.dtype != np.uint8:
+            arr = np.clip(arr, 0, 255).astype(np.uint8)
+        Image.fromarray(arr).save(path, format="JPEG")
+
+    def _save_raw_obs(self, obs: dict, frame_dir: pathlib.Path) -> None:
+        frame_dir.mkdir(parents=True, exist_ok=True)
+
+        image_keys = ["cam_high", "cam_left_wrist", "cam_right_wrist"]
+        images = obs.get("images", {})
+        for idx, key in enumerate(image_keys):
+            if key in images:
+                self._save_image_jpg(images[key], frame_dir / f"image_{idx}.jpg")
+
+        prompt = obs.get("prompt", "")
+        if isinstance(prompt, (bytes, bytearray)):
+            prompt = prompt.decode("utf-8")
+        elif not isinstance(prompt, str):
+            prompt = str(prompt)
+        (frame_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
+
+        state = self._to_numpy(obs["state"]).astype(np.float64, copy=False)
+        (frame_dir / "state.bin").write_bytes(state.tobytes())
+
+    def save_obs(self, obs: dict, reset: bool = False) -> None:
+        """Save raw obs to the eval video directory when save_frame is enabled."""
+        if not self.save_frame or not self.frame_save_dir:
+            return
+
+        if reset:
+            self._frame_idx = 0
+            if self._frame_save_started:
+                self._frame_episode_idx += 1
+            else:
+                self._frame_episode_idx = 0
+                self._frame_save_started = True
+            self._frame_episode_dir = pathlib.Path(self.frame_save_dir) / f"episode{self._frame_episode_idx}"
+            self._frame_episode_dir.mkdir(parents=True, exist_ok=True)
+
+        if self._frame_episode_dir is None:
+            self._frame_episode_dir = pathlib.Path(self.frame_save_dir) / f"episode{self._frame_episode_idx}"
+            self._frame_episode_dir.mkdir(parents=True, exist_ok=True)
+
+        frame_dir = self._frame_episode_dir / f"frame_{self._frame_idx:06d}"
+        self._save_raw_obs(obs, frame_dir)
+        self._frame_idx += 1
+
     @override
     def infer(self, obs: dict, reset=False, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
         if self.stage != SKIP:
@@ -453,6 +516,9 @@ class Policy(BasePolicy):
 
         if reset:
             self.reset_filter()
+
+        if self.save_frame and not self.save_all_frames:
+            self.save_obs(obs, reset)
 
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)

@@ -55,7 +55,7 @@ class PI0:
         print(f"successfully set instruction:{instruction}")
 
     # Update the observation window buffer
-    def update_observation_window(self, img_arr, state):
+    def update_observation_window(self, img_arr, state, reset=False):
         img_front, img_right, img_left, puppet_arm = (
             img_arr[0],
             img_arr[1],
@@ -75,6 +75,9 @@ class PI0:
             },
             "prompt": self.instruction,
         }
+
+        if self.policy.save_frame and self.policy.save_all_frames:
+            self.policy.save_obs(self.observation_window, reset=reset)
 
     def get_action(self,reset=False):
         assert self.observation_window is not None, "update observation_window first!"

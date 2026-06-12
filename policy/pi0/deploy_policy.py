@@ -36,7 +36,7 @@ def eval(TASK_ENV, model, observation, reset=False):
         model.set_language(instruction)
 
     input_rgb_arr, input_state = encode_obs(observation)
-    model.update_observation_window(input_rgb_arr, input_state)
+    model.update_observation_window(input_rgb_arr, input_state, reset=reset)
 
     # ======== Get Action ========
 
