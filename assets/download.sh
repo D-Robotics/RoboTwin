@@ -19,5 +19,5 @@ sed -i \
   -e 's|urdf_path:[[:space:]]*\${ASSETS_PATH}|urdf_path: ../../../../../..|g' \
   -e 's|collision_spheres:[[:space:]]*\${ASSETS_PATH}|collision_spheres: ../../../../../../../|g' \
   "curobo_right.yml"
-cd ../eval_data/beat_block_hammer/
+cd ../../../eval_data/beat_block_hammer/
 unzip 0.zip
