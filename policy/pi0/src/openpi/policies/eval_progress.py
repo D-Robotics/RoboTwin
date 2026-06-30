@@ -8,7 +8,7 @@ _RESET = "\033[0m"
 
 
 class EvalLiveProgress:
-    """One live status line: CYCLE N - Env Step: X / Y [ SEND OK | RECEIVE OK ]."""
+    """One live status line: CYCLE N - Step: X / Y [ SEND OK | RECEIVE OK ]."""
 
     def __init__(self) -> None:
         self.enabled = False
@@ -117,7 +117,7 @@ class EvalLiveProgress:
         if recv_tag:
             tags.append(recv_tag)
         inner = " | ".join(tags) if tags else "..."
-        line = f"  CYCLE {self.cycle + 1} - Env Step: {step_text} [ {inner} ]"
+        line = f"  CYCLE {self.cycle + 1} - Step: {step_text} [ {inner} ]"
         print(f"\r\033[K{line}", end="", flush=True)
 
 

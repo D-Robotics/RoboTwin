@@ -710,5 +710,5 @@ def planner_process_worker(conn, args):
 
         except EOFError:
             break
-        except Exception as e:
+        except ValueError as e:
             conn.send({"error": str(e)})
