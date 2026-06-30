@@ -40,7 +40,11 @@ def eval(TASK_ENV, model, observation, reset=False):
 
     # ======== Get Action ========
 
-    actions = model.get_action(reset)[:model.pi0_step]
+    actions = model.get_action(
+        reset,
+        env_step=TASK_ENV.take_action_cnt,
+        env_step_lim=TASK_ENV.step_lim,
+    )[:model.pi0_step]
 
     for action in actions:
         TASK_ENV.take_action(action)

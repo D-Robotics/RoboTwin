@@ -13,7 +13,7 @@ class PaligemmaTokenizer:
     def __init__(self, max_len: int = 48):
         self._max_len = max_len
         path = download.maybe_download("gs://big_vision/paligemma_tokenizer.model", gs={"token": "anon"})
-        print('Load tokenizer success!')
+        print("Tokenizer loaded successfully.")
         with path.open("rb") as f:
             self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
 

@@ -40,10 +40,17 @@ class PI0:
             cfg['torch_model'],
             robotwin_repo_id=model_name,
             cfg = cfg)
-        print("Load model success!")
+        if cfg.get("use_cpp") and cfg.get("stage") == 2:
+            pass
+        else:
+            print("Load model success.")
         self.img_size = (224, 224)
         self.observation_window = None
         self.pi0_step = pi0_step
+
+    def connect_remote(self) -> None:
+        if hasattr(self.policy, "connect"):
+            self.policy.connect()
 
     # set img_size
     def set_img_size(self, img_size):
@@ -52,7 +59,6 @@ class PI0:
     # set language randomly
     def set_language(self, instruction):
         self.instruction = instruction
-        print(f"successfully set instruction:{instruction}")
 
     # Update the observation window buffer
     def update_observation_window(self, img_arr, state, reset=False):
@@ -79,11 +85,15 @@ class PI0:
         if self.policy.save_frame and self.policy.save_all_frames:
             self.policy.save_obs(self.observation_window, reset=reset)
 
-    def get_action(self,reset=False):
+    def get_action(self, reset=False, env_step=None, env_step_lim=None):
         assert self.observation_window is not None, "update observation_window first!"
-        return self.policy.infer(self.observation_window,reset)["actions"]
+        return self.policy.infer(
+            self.observation_window,
+            reset,
+            env_step=env_step,
+            env_step_lim=env_step_lim,
+        )["actions"]
 
     def reset_obsrvationwindows(self):
         self.instruction = None
         self.observation_window = None
-        print("successfully unset obs and language intruction")

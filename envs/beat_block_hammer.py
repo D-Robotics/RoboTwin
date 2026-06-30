@@ -43,7 +43,8 @@ class beat_block_hammer(Base_Task):
         else:
             with open(f'{self.data_path}/{self.count}_pos.pkl','rb') as f:
                 block_pose = pickle.load(f)
-            print(f'Load Actor {self.count}')
+            if not self.silent_actor_log:
+                print(f'Load Actor {self.count}')
 
         self.block = create_box(
             scene=self,

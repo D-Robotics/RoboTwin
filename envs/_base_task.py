@@ -93,6 +93,7 @@ class Base_Task(gym.Env):
         self.save_data = kwags.get("save_data", False)
         self.dual_arm = kwags.get("dual_arm", True)
         self.eval_mode = kwags.get("eval_mode", False)
+        self.silent_actor_log = kwags.get("silent_actor_log", False)
 
         self.need_topp = True  # TODO
         
@@ -1553,7 +1554,20 @@ class Base_Task(gym.Env):
                 elif self.eval_video_ffmpeg:
                     self.eval_video_ffmpeg.stdin.write(img.tobytes())
         self.take_action_cnt += 1
-        print(f"step: \033[92m{self.take_action_cnt} / {self.step_lim}\033[0m", end="\r")
+        handled = False
+        if self.eval_video_path is not None:
+            try:
+                from openpi.policies.eval_progress import eval_live
+
+                handled = eval_live.update_step(self.take_action_cnt, self.step_lim)
+            except ImportError:
+                handled = False
+        if not handled:
+            print(
+                f"\r\033[Kstep: \033[92m{self.take_action_cnt} / {self.step_lim}\033[0m",
+                end="",
+                flush=True,
+            )
 
         self._update_render()
         if self.render_freq:

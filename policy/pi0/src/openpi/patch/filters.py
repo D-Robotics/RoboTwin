@@ -7,8 +7,7 @@ import numpy as np
 
 class NoFilter:
     def __init__(self, *args, **kwargs):
-        # 重写__new__，创建实例时直接返回None（跳过对象创建）
-        print("NoFilter")
+        pass
 
     def reset(self):
         pass
@@ -21,7 +20,6 @@ class ZeroPhaseFTR:
     def __init__(self, numtaps=11, cutoff=3, fs=50, channels=14):
         self.b = firwin(numtaps, cutoff, fs=fs)
         self.channels = channels
-        print("ZeroPhase")
 
     def reset(self):
         pass
@@ -51,7 +49,6 @@ class FIR:
         self.b = firwin(numtaps, cutoff, fs=fs)
         self.channels = channels
         self.zi = np.zeros((numtaps - 1, channels))  # 每列保存一个通道的历史
-        print("FIR")
 
     def reset(self):
         """清除历史缓存"""
@@ -79,7 +76,6 @@ class MultiChannelButterworth:
         self.channels = channels
         self.x_hist = np.zeros((len(self.b), channels))
         self.y_hist = np.zeros((len(self.a), channels))
-        print("Butter")
 
     def reset(self):
         self.x_hist = np.zeros((len(self.b), self.channels))

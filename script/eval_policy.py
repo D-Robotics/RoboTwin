@@ -36,6 +36,35 @@ parent_directory = os.path.dirname(current_file_path)
 import pickle
 
 
+EVAL_SECTION_DIVIDER = "─" * 62
+
+
+def _print_eval_section(
+    task_name: str,
+    policy_name: str,
+    *,
+    eval_mode: str = "new",
+    eval_id: int | None = None,
+) -> None:
+    label_width = 12
+    if eval_mode == "resume":
+        eval_text = f"resume (eval_id {eval_id})"
+    else:
+        eval_text = "new"
+    print()
+    print(EVAL_SECTION_DIVIDER)
+    print(f"  {'Task Name'.ljust(label_width)} : \033[34m{task_name}\033[0m")
+    print(f"  {'Policy Name'.ljust(label_width)} : \033[34m{policy_name}\033[0m")
+    print(f"  {'Eval'.ljust(label_width)} : \033[92m{eval_text}\033[0m")
+    print(EVAL_SECTION_DIVIDER)
+    print()
+
+
+def _connect_remote_if_needed(model, cfg: dict) -> None:
+    if cfg.get("use_cpp") and cfg.get("stage") == 2 and hasattr(model, "connect_remote"):
+        model.connect_remote()
+
+
 def class_decorator(task_name):
     envs_module = importlib.import_module(f"envs.{task_name}")
     try:
@@ -242,7 +271,7 @@ def main(usr_args):
         + str(args["camera"]["collect_wrist_camera"])
     )
     print("\033[94mEmbodiment Config:\033[0m " + embodiment_name)
-    print("\n==================================")
+    print("\n==================================\n")
 
     TASK_ENV = class_decorator(args["task_name"])
     args["policy_name"] = policy_name
@@ -308,9 +337,6 @@ def eval_policy(
     yaml_path=None,
     restore=False,
 ):
-    print(f"\033[34mTask Name: {args['task_name']}\033[0m")
-    print(f"\033[34mPolicy Name: {args['policy_name']}\033[0m")
-
     expert_check = True
     TASK_ENV.suc = 0
     TASK_ENV.test_num = 0
@@ -335,6 +361,8 @@ def eval_policy(
         data = yaml.safe_load(f)
 
     # Handle restore logic
+    eval_mode = "new"
+    eval_id = None
     if os.path.exists(temp_path) and restore:
         # Restore previous eval session
         with open(temp_path, "rb") as f:
@@ -376,12 +404,19 @@ def eval_policy(
             TASK_ENV.suc = len(suc_list)
             print(f"\033[92mRestored status from last eval:\033[0m {TASK_ENV.suc}/{TASK_ENV.test_num}")
             print(f"\033[92mCurrent success list: \033[0m{suc_list}")
+            eval_mode = "resume"
+            eval_id = now_id
     elif os.path.exists(temp_path):
         # Clear previous eval status
         os.remove(temp_path)
-        print(f"\033[92mCleared last eval status and start new eval!\033[0m")
-    else:
-        print(f"\033[92mStart new eval!\033[0m")
+
+    _print_eval_section(
+        args["task_name"],
+        args["policy_name"],
+        eval_mode=eval_mode,
+        eval_id=eval_id,
+    )
+    _connect_remote_if_needed(model, data)
 
     # Ensure config.yaml exists in eval directory
     test_yaml_path = os.path.join(args["eval_video_save_dir"], "config.yaml")
@@ -436,7 +471,7 @@ def eval_policy(
         if expert_check:
             try:
                 TASK_ENV.setup_demo(
-                    now_ep_num=now_id, seed=now_seed, is_test=True, **args
+                    now_ep_num=now_id, seed=now_seed, is_test=True, silent_actor_log=True, **args
                 )
                 episode_info = TASK_ENV.play_once()
                 TASK_ENV.close_env()
@@ -469,7 +504,9 @@ def eval_policy(
             continue
 
         args["render_freq"] = render_freq
-        TASK_ENV.setup_demo(now_ep_num=now_id, seed=now_seed, is_test=True, **args)
+        TASK_ENV.setup_demo(
+            now_ep_num=now_id, seed=now_seed, is_test=True, silent_actor_log=True, **args
+        )
         episode_info_list = [episode_info["info"]]
         results = generate_episode_descriptions(
             args["task_name"], episode_info_list, test_num
@@ -478,10 +515,19 @@ def eval_policy(
             instruction = np.random.choice(results[0][instruction_type])
             with open(f"./eval_data/{task_name}/{SAMPLE}/{now_id}_inst.pkl", "wb") as f:
                 pickle.dump(instruction, f)
-            print(f"Sample instruction {now_id}")
         else:
             with open(f"./eval_data/{task_name}/{SAMPLE}/{now_id}_inst.pkl", "rb") as f:
                 instruction = pickle.load(f)
+
+        try:
+            from openpi.policies.policy import print_episode_section, print_episode_end
+        except ImportError:
+            print_episode_section = None
+            print_episode_end = None
+        if print_episode_section is not None:
+            print_episode_section(now_id, instruction)
+        else:
+            print(f"Load Actor {now_id}")
             print(f"Load instruction {now_id}")
 
         TASK_ENV.set_instruction(instruction=instruction)  # set language instruction
@@ -567,11 +613,9 @@ def eval_policy(
 
         if succ:
             TASK_ENV.suc += 1
-            print("\033[92mSuccess!\033[0m")
             suc_list.append(TASK_ENV.test_num)
-
         else:
-            print("\033[91mFail!\033[0m")
+            pass
 
         now_id += 1
         TASK_ENV.close_env(clear_cache=((succ_seed + 1) % clear_cache_freq == 0))
@@ -581,10 +625,34 @@ def eval_policy(
 
         TASK_ENV.test_num += 1
 
-        print(
-            f"\033[93m{task_name}\033[0m | \033[94m{args['policy_name']}\033[0m | \033[92m{args['task_config']}\033[0m | \033[91m{args['ckpt_setting']}\033[0m\n"
-            f"Success rate: \033[96m{TASK_ENV.suc}/{TASK_ENV.test_num}\033[0m => \033[95m{round(TASK_ENV.suc / TASK_ENV.test_num * 100, 1)}%\033[0m, current seed: \033[90m{now_seed}\033[0m\n"
-        )
+        if print_episode_end is not None:
+            print_episode_end(
+                success=succ,
+                step=TASK_ENV.take_action_cnt,
+                step_lim=TASK_ENV.step_lim,
+                task_name=task_name,
+                policy_name=args["policy_name"],
+                task_config=args["task_config"],
+                ckpt_setting=args["ckpt_setting"],
+                suc=TASK_ENV.suc,
+                test_num=TASK_ENV.test_num,
+                seed=now_seed,
+            )
+        else:
+            result_line = "SUCCESS" if succ else "FAIL"
+            result_color = "\033[92m" if succ else "\033[91m"
+            reset = "\033[0m"
+            success_rate = round(TASK_ENV.suc / TASK_ENV.test_num * 100, 1)
+            print()
+            print("=" * 62)
+            print(f"  EPISODE RESULT : {result_color}{result_line}{reset}")
+            print(f"  Task           : {task_name} | {args['policy_name']} | {args['task_config']} | {args['ckpt_setting']}")
+            print(
+                f"  Success Rate   : \033[96m{TASK_ENV.suc}/{TASK_ENV.test_num}{reset} => "
+                f"\033[95m{success_rate}%{reset}, seed: \033[90m{now_seed}{reset}"
+            )
+            print("=" * 62)
+            print()
         # TASK_ENV._take_picture()
         now_seed += 1
 

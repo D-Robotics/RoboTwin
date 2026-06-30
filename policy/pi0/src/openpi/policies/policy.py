@@ -19,6 +19,7 @@ from openpi.shared import nnx_utils
 import openpi.models_pytorch.preprocessing_pytorch as _preprocessing
 
 import socket
+import select
 import time
 
 from safetensors.torch import load_file
@@ -31,11 +32,145 @@ from PIL import Image
 from openpi.patch import msg_pb2
 from openpi.patch.filters import NoFilter, FIR, ZeroPhaseFTR, MultiChannelButterworth
 from openpi.patch.utils import dict_equal
+from openpi.policies.eval_progress import EvalLiveProgress, eval_live
 
 BasePolicy: TypeAlias = _base_policy.BasePolicy
 
 OBS, SKIP, FULL = range(3)
 DBG = False
+
+_BLUE = "\033[34m"
+_GREEN = "\033[92m"
+_RED = "\033[91m"
+_RESET = "\033[0m"
+
+_BOLD_MAGENTA = "\033[1;35m"
+_BOLD_GREEN = "\033[1;32m"
+_BOLD_RED = "\033[1;31m"
+_BOLD_YELLOW_UL = "\033[1;4;33m"
+
+_BORDER = "━" * 80
+
+_DTYPE_NAMES = {
+    msg_pb2.Tensor.FLOAT64: "float64",
+    msg_pb2.Tensor.UINT8: "uint8",
+    msg_pb2.Tensor.STRING: "string",
+    msg_pb2.Tensor.FLOAT32: "float32",
+    msg_pb2.Tensor.INT32: "int32",
+    msg_pb2.Tensor.FP16: "float16",
+}
+
+
+def _dtype_name(dtype: int) -> str:
+    return _DTYPE_NAMES.get(dtype, str(dtype))
+
+
+def _shape_str(shape) -> str:
+    if not shape:
+        return "scalar"
+    return "x".join(str(dim) for dim in shape)
+
+
+def print_startup_banner(*, trailing_blank: bool = False) -> None:
+    print("╔══════════════════════════════════════════════════════════════╗")
+    print("║                          PI0 DEMO                            ║")
+    print("╚══════════════════════════════════════════════════════════════╝")
+    if trailing_blank:
+        print()
+
+
+def _flush_progress_line() -> None:
+    print("\r\033[K", end="", flush=True)
+
+
+def _format_header_inline(header) -> str:
+    timestamp = header.stamp.sec + header.stamp.nsec / 1e9
+    return (
+        f"Seq: {header.seq} | Time: {timestamp:.9f} | "
+        f"Reset: {str(header.reset).lower()}"
+    )
+
+
+def _format_body_lines(batch) -> list[str]:
+    lines: list[str] = []
+    if batch.images:
+        img = batch.images[0]
+        lines.append(
+            f"Images: {len(batch.images)} ({_dtype_name(img.dtype)}, {_shape_str(img.shape)})"
+        )
+    if batch.languages:
+        lang = batch.languages[0]
+        lines.append(
+            f"Languages: {len(batch.languages)} ({_dtype_name(lang.dtype)}, {_shape_str(lang.shape)})"
+        )
+    if batch.states:
+        state = batch.states[0]
+        lines.append(
+            f"States: {len(batch.states)} ({_dtype_name(state.dtype)}, {_shape_str(state.shape)})"
+        )
+    return lines
+
+
+def _print_io_verbose(
+    tag: str,
+    ok: bool,
+    payload_bytes: int,
+    header=None,
+    batch=None,
+) -> None:
+    _flush_progress_line()
+    status = "OK" if ok else "FAILED"
+    print(f"  [{tag}] Status: {status} ({payload_bytes} bytes)")
+    if header is not None:
+        print(f"    Header ➔ {_format_header_inline(header)}")
+    if batch is not None:
+        body_lines = _format_body_lines(batch)
+        for idx, line in enumerate(body_lines):
+            prefix = "    Body   ➔ " if idx == 0 else "           ➔ "
+            print(f"{prefix}{line}")
+    print()
+
+
+def print_episode_start(episode_id: int, prompt: str) -> None:
+    _flush_progress_line()
+    print()
+    print(f"{_BOLD_MAGENTA}[EPISODE START]{_RESET}")
+    print(_BORDER)
+    print(f"  Actor  : {episode_id}")
+    print(f"  {_BOLD_YELLOW_UL}Prompt : {prompt}{_RESET}")
+    print()
+
+
+def print_episode_section(episode_id: int, prompt: str) -> None:
+    print_episode_start(episode_id, prompt)
+
+
+def print_episode_end(
+    *,
+    success: bool,
+    step: int,
+    step_lim: int,
+    task_name: str,
+    policy_name: str,
+    task_config: str = "",
+    ckpt_setting: str = "",
+    suc: int,
+    test_num: int,
+    seed: int,
+) -> None:
+    _flush_progress_line()
+    success_rate = round(suc / test_num * 100, 1) if test_num else 0.0
+    result_tag = f"{_BOLD_GREEN}[EPISODE SUCCESS]{_RESET}" if success else f"{_BOLD_RED}[EPISODE FAIL]{_RESET}"
+    print(_BORDER)
+    print(f"{result_tag} (Step: {step} / {step_lim})")
+    print(
+        f"  Task: \033[93m{task_name}\033[0m | \033[94m{policy_name}\033[0m | "
+        f"Success Rate: \033[96m{suc}/{test_num}\033[0m (\033[95m{success_rate}%\033[0m) | "
+        f"seed: \033[90m{seed}\033[0m"
+    )
+    print(_BORDER)
+    print()
+
 
 # SKIP: Robotwin raw procedure
 # OBS: Send and receive obs to test consistency
@@ -77,9 +212,12 @@ class Policy(BasePolicy):
         self.listen_fd = None
         self.sock_fd = None
         self.seq = 0
+        self._io_log_cycles = 0
 
         # config
         self.stage = cfg["stage"]
+        if self.stage == FULL:
+            eval_live.enabled = True
         self.port = cfg["port"]
         self.do_preproc = cfg["do_preproc"] and self.stage == FULL
         self.do_postproc = cfg["do_postproc"] and self.stage == FULL
@@ -105,9 +243,16 @@ class Policy(BasePolicy):
 
         filter_zoo = [NoFilter, MultiChannelButterworth, FIR, ZeroPhaseFTR]
         filter_class = filter_zoo[self.filter_type]
+        filter_names = [
+            "No filter loaded.",
+            "Multi-channel Butterworth filter loaded.",
+            "FIR filter loaded.",
+            "Zero-phase FIR filter loaded.",
+        ]
 
         self.filter = filter_class(**common_params)
         self.filter_py = filter_class(**common_params)
+        print(filter_names[self.filter_type])
 
     def filt(self, arr):
         return self.filter.filter(arr)
@@ -167,17 +312,30 @@ class Policy(BasePolicy):
         # 3. 开始监听连接
         try:
             self.listen_fd.listen(5)
-            print(f"服务器启动成功，等待客户端连接...（端口：{self.port}）")
         except OSError as e:
             print(f"监听失败：{str(e)}")
             self.disconnect()
             return
 
-        # 4. 接受客户端连接
+        _flush_progress_line()
+        print(f"{_BLUE}[CONNECT]{_RESET}")
+        print(f"  Listen : 0.0.0.0:{self.port}")
+
+        connect_start = time.time()
         try:
-            self.sock_fd, client_addr = self.listen_fd.accept()
-            print(f"客户端已连接：IP={client_addr[0]}, 端口={client_addr[1]}")
+            while True:
+                elapsed = int(time.time() - connect_start)
+                readable, _, _ = select.select([self.listen_fd], [], [], 1.0)
+                print(f"\r  Status : WAITING {elapsed}s", end="", flush=True)
+                if readable:
+                    self.sock_fd, client_addr = self.listen_fd.accept()
+                    break
+            print(f"\r\033[K  Client : {client_addr[0]}:{client_addr[1]}")
+            print(f"  Status : {_GREEN}CONNECTED{_RESET}")
+            print()
+            print("Engine Starting...")
         except OSError as e:
+            print()
             print(f"接受连接失败：{str(e)}")
             self.disconnect()
             return
@@ -186,7 +344,7 @@ class Policy(BasePolicy):
         self._close_socket(self.listen_fd)
         self.listen_fd = None
 
-    def send(self, observation: dict, reset=False) -> bool:
+    def send(self, observation: dict, reset=False, verbose: bool = True, live_io: EvalLiveProgress | None = None) -> bool:
         sock = self.sock_fd
         """发送多模态输入消息"""
         input_msg = msg_pb2.MultiModalInput()
@@ -239,11 +397,9 @@ class Policy(BasePolicy):
             if self.visp:
                 img = img.astype(jnp.float16)
                 image.dtype = msg_pb2.Tensor.FP16
-                print("sent fp16")
             else:
                 img = img.astype(jnp.float32)
                 image.dtype = msg_pb2.Tensor.FLOAT32
-                print("sent fp32")
             image.shape.extend(img.shape)
             image.data = img.tobytes()
 
@@ -270,7 +426,7 @@ class Policy(BasePolicy):
         state.data = state_obs.tobytes()
 
         # 发送消息
-        def send_proto_message(sock: socket.socket, msg) -> bool:
+        def send_proto_message(sock: socket.socket, msg, verbose: bool) -> bool:
             try:
                 # 1. 序列化 Protobuf 消息
                 serialized_data = msg.SerializeToString()
@@ -285,30 +441,33 @@ class Policy(BasePolicy):
                 # 3. 先发送长度，再发送数据
                 sock.sendall(net_len_bytes)  # 发送 4 字节长度
                 sock.sendall(serialized_data)  # 发送 Protobuf 数据
-                print(f"发送成功，长度：{data_len}字节\n")
+                if verbose:
+                    _print_io_verbose("SEND", True, data_len, msg.header, msg)
+                elif live_io is not None:
+                    live_io.complete_send(True)
                 return True
             except Exception as e:
                 print(f"发送失败：{str(e)}")
+                if verbose:
+                    _print_io_verbose("SEND", False, 0)
+                elif live_io is not None:
+                    live_io.complete_send(False)
                 return False
 
-        return send_proto_message(sock, input_msg)
+        return send_proto_message(sock, input_msg, verbose)
 
-    def receive(self, sent_obs=None, reset=None):
-        def parse_header(header):
-            """解析并打印Header信息"""
-            print("===== 解析 Header 信息 =====")
-            print(f"序列号 : {header.seq}")
-            print(f"时间戳: {header.stamp.sec}.{header.stamp.nsec}")
-            time_sec = header.stamp.sec + header.stamp.nsec / 1e9
-            print("====== 解析 Body 信息 ======")
-
-        def recv_proto_message(sock, msg):
+    def receive(self, sent_obs=None, reset=None, verbose: bool = True, live_io: EvalLiveProgress | None = None):
+        def recv_proto_message(sock, msg, verbose: bool):
             """接收protobuf消息(先接收长度，再接收数据)"""
             try:
                 # 1. 接收 4 字节长度（网络序→大端）
                 net_len_data = sock.recv(4)
                 if len(net_len_data) != 4:
                     print("未收到完整长度（需4字节，实际收到{}字节）".format(len(net_len_data)))
+                    if verbose:
+                        _print_io_verbose("RECEIVE", False, len(net_len_data))
+                    elif live_io is not None:
+                        live_io.complete_recv(False)
                     return False
 
                 # 关键：用 ">I"（大端）解析 4 字节无符号整数
@@ -322,15 +481,26 @@ class Policy(BasePolicy):
                     chunk = sock.recv(min(4096, data_len - len(serialized_data)))
                     if not chunk:
                         print("连接断开")
+                        if verbose:
+                            _print_io_verbose("RECEIVE", False, len(serialized_data))
+                        elif live_io is not None:
+                            live_io.complete_recv(False)
                         return False
                     serialized_data += chunk
 
                 # 反序列化
                 msg.ParseFromString(serialized_data)
-                print(f"接收成功，长度：{data_len}字节")
+                if verbose:
+                    _print_io_verbose("RECEIVE", True, data_len, msg.header, msg)
+                elif live_io is not None:
+                    live_io.complete_recv(True)
                 return True
             except Exception as e:
                 print(f"接收失败：{str(e)}")
+                if verbose:
+                    _print_io_verbose("RECEIVE", False, 0)
+                elif live_io is not None:
+                    live_io.complete_recv(False)
                 return False
 
         while True:
@@ -339,27 +509,24 @@ class Policy(BasePolicy):
                 if self.sock_fd is None:
                     time.sleep(0.5)
                     continue
-                if sent_obs is not None and not self.send(sent_obs, reset):
+                if sent_obs is not None and not self.send(sent_obs, reset, verbose=verbose, live_io=live_io):
                     self.disconnect()
                     time.sleep(0.5)
                     continue
 
             batch = msg_pb2.MultiModalInput()
-            if not recv_proto_message(self.sock_fd, batch):
+            if not recv_proto_message(self.sock_fd, batch, verbose):
                 print("连接异常，等待客户端重连...")
                 self.disconnect()
                 self.connect()
                 if self.sock_fd is None:
                     time.sleep(0.5)
                     continue
-                if sent_obs is not None and not self.send(sent_obs, reset):
+                if sent_obs is not None and not self.send(sent_obs, reset, verbose=verbose, live_io=live_io):
                     self.disconnect()
                     time.sleep(0.5)
                     continue
                 continue
-
-            # 解析Header
-            parse_header(batch.header)
 
             def parse_type(input):
                 if input.dtype == msg_pb2.Tensor.STRING:
@@ -381,40 +548,23 @@ class Policy(BasePolicy):
             # 解析图片张量
             imgs = []
             img_size = len(batch.images)
-            print(f"接收到 {img_size} 个图像张量：")
             for i in range(img_size):
                 img = batch.images[i]
-                print(f"  语言{i}：类型={img.dtype}，维度=", end="")
-                for dim in img.shape:
-                    print(f"{dim} ", end="")
-                print()
                 imgs.append(parse_type(img))
 
             # 解析语言张量
             langs = []
             lang_size = len(batch.languages)
-            print(f"接收到 {lang_size} 个嵌入张量：")
             for i in range(lang_size):
                 lang = batch.languages[i]
-                print(f"  语言{i}：类型={lang.dtype}，维度=", end="")
-                for dim in lang.shape:
-                    print(f"{dim} ", end="")
-                print()
                 langs.append(parse_type(lang))
 
             # 解析状态张量
             states = []
             state_size = len(batch.states)
-            print(f"接收到 {state_size} 个状态张量：")
             for i in range(state_size):
                 state = batch.states[i]
-                print(f"  语言{i}：类型={state.dtype}，维度=", end="")
-                for dim in state.shape:
-                    print(f"{dim} ", end="")
-                print()
                 states.append(parse_type(state))
-
-            print("============================")
 
             img_keys = [
                 ["cam_high", "cam_left_wrist", "cam_right_wrist"],
@@ -510,12 +660,21 @@ class Policy(BasePolicy):
         self._frame_idx += 1
 
     @override
-    def infer(self, obs: dict, reset=False, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
+    def infer(
+        self,
+        obs: dict,
+        reset=False,
+        noise: np.ndarray | None = None,
+        env_step: int | None = None,
+        env_step_lim: int | None = None,
+    ) -> dict:  # type: ignore[misc]
         if self.stage != SKIP:
             self.connect()
 
         if reset:
             self.reset_filter()
+            self._io_log_cycles = 0
+            eval_live.reset_episode()
 
         if self.save_frame and not self.save_all_frames:
             self.save_obs(obs, reset)
@@ -542,8 +701,19 @@ class Policy(BasePolicy):
         
         # Connect Mode
         if self.stage == FULL:
-            self.send(sent_obs, reset)
-            recv_data = self.receive(sent_obs, reset)
+            cycle = self._io_log_cycles
+            verbose_io = self.debug or cycle == 0
+            if verbose_io:
+                self.send(sent_obs, reset, verbose=True)
+                recv_data = self.receive(sent_obs, reset, verbose=True)
+                eval_live.complete_cycle_verbose(cycle, env_step, env_step_lim)
+            else:
+                eval_live.begin_infer_cycle(cycle, env_step, env_step_lim)
+                eval_live.begin_send()
+                self.send(sent_obs, reset, verbose=False, live_io=eval_live)
+                eval_live.begin_recv()
+                recv_data = self.receive(sent_obs, reset, verbose=False, live_io=eval_live)
+            self._io_log_cycles += 1
             action_recv = self.proc_action(recv_data)
             # Just Return if no model loaded
             if self._model is None:

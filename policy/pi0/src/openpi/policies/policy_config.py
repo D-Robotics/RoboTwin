@@ -62,7 +62,7 @@ def create_trained_policy(
     need_norm = stage != FULL or do_preproc or do_postproc
     
     if use_cpp:
-        print(f"No model loaded!")
+        print("Remote inference enabled (local Torch model skipped).")
         model = None
     elif is_pytorch:
         print(f"Loading model from {weight_path}...")
