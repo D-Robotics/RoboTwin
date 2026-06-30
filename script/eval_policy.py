@@ -44,18 +44,19 @@ def _print_eval_section(
     policy_name: str,
     *,
     eval_mode: str = "new",
-    eval_id: int | None = None,
+    eval_result_name: str = "",
+    history_path: str | None = None,
 ) -> None:
     label_width = 12
-    if eval_mode == "resume":
-        eval_text = f"resume (eval_id {eval_id})"
-    else:
-        eval_text = "new"
+    mode_tag = "restore" if eval_mode == "resume" else "new"
+    eval_text = f"{eval_result_name}({mode_tag})"
     print()
     print(EVAL_SECTION_DIVIDER)
     print(f"  {'Task Name'.ljust(label_width)} : \033[34m{task_name}\033[0m")
     print(f"  {'Policy Name'.ljust(label_width)} : \033[34m{policy_name}\033[0m")
     print(f"  {'Eval'.ljust(label_width)} : \033[92m{eval_text}\033[0m")
+    if eval_mode == "resume" and history_path:
+        print(f"  {'Restore Path'.ljust(label_width)} : \033[90m{history_path}\033[0m")
     print(EVAL_SECTION_DIVIDER)
     print()
 
@@ -410,11 +411,16 @@ def eval_policy(
         # Clear previous eval status
         os.remove(temp_path)
 
+    eval_result_dir = args.get("eval_video_save_dir")
+    eval_result_name = Path(eval_result_dir).name if eval_result_dir else "unknown"
+    history_path = str(eval_result_dir) if eval_mode == "resume" and eval_result_dir else None
+
     _print_eval_section(
         args["task_name"],
         args["policy_name"],
         eval_mode=eval_mode,
-        eval_id=eval_id,
+        eval_result_name=eval_result_name,
+        history_path=history_path,
     )
     _connect_remote_if_needed(model, data)
 

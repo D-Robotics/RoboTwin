@@ -42,12 +42,16 @@ DBG = False
 _BLUE = "\033[34m"
 _GREEN = "\033[92m"
 _RED = "\033[91m"
+_GRAY = "\033[90m"
+_YELLOW = "\033[93m"
 _RESET = "\033[0m"
 
 _BOLD_MAGENTA = "\033[1;35m"
 _BOLD_GREEN = "\033[1;32m"
 _BOLD_RED = "\033[1;31m"
 _BOLD_YELLOW_UL = "\033[1;4;33m"
+
+_MAGENTA = "\033[35m"
 
 _BORDER = "━" * 80
 
@@ -83,12 +87,21 @@ def _flush_progress_line() -> None:
     print("\r\033[K", end="", flush=True)
 
 
-def _format_header_inline(header) -> str:
-    timestamp = header.stamp.sec + header.stamp.nsec / 1e9
-    return (
-        f"Seq: {header.seq} | Time: {timestamp:.9f} | "
-        f"Reset: {str(header.reset).lower()}"
-    )
+def _format_header_inline(header, *, show_reset: bool = True) -> str:
+    parts = [f"Seq: {header.seq}"]
+    if show_reset:
+        reset_str = str(header.reset).lower()
+        if header.reset:
+            parts.append(f"{_YELLOW}Reset: true{_RESET}")
+        else:
+            parts.append(f"Reset: {reset_str}")
+    return " | ".join(parts)
+
+
+def _status_text(ok: bool) -> str:
+    if ok:
+        return f"{_GREEN}OK{_RESET}"
+    return f"{_RED}FAILED{_RESET}"
 
 
 def _format_body_lines(batch) -> list[str]:
@@ -111,6 +124,18 @@ def _format_body_lines(batch) -> list[str]:
     return lines
 
 
+def _io_tag_label(tag: str) -> str:
+    if tag == "SEND":
+        color = _BLUE
+    elif tag == "RECEIVE":
+        color = _MAGENTA
+    else:
+        color = ""
+    if color:
+        return f"{color}[{tag}]{_RESET}"
+    return f"[{tag}]"
+
+
 def _print_io_verbose(
     tag: str,
     ok: bool,
@@ -119,10 +144,11 @@ def _print_io_verbose(
     batch=None,
 ) -> None:
     _flush_progress_line()
-    status = "OK" if ok else "FAILED"
-    print(f"  [{tag}] Status: {status} ({payload_bytes} bytes)")
+    status = _status_text(ok)
+    payload = f"{_GRAY}({payload_bytes} bytes){_RESET}"
+    print(f"  {_io_tag_label(tag)} Status: {status} {payload}")
     if header is not None:
-        print(f"    Header ➔ {_format_header_inline(header)}")
+        print(f"    Header ➔ {_format_header_inline(header, show_reset=(tag == 'SEND'))}")
     if batch is not None:
         body_lines = _format_body_lines(batch)
         for idx, line in enumerate(body_lines):
@@ -164,8 +190,9 @@ def print_episode_end(
     print(_BORDER)
     print(f"{result_tag} (Step: {step} / {step_lim})")
     print(
-        f"  Task: \033[93m{task_name}\033[0m | \033[94m{policy_name}\033[0m | "
-        f"Success Rate: \033[96m{suc}/{test_num}\033[0m (\033[95m{success_rate}%\033[0m) | "
+        f"  \033[1mSuccess Rate:\033[0m \033[96m{suc}/{test_num}\033[0m "
+        f"(\033[95m{success_rate}%\033[0m) | "
+        f"\033[93m{task_name}\033[0m | \033[94m{policy_name}\033[0m | "
         f"seed: \033[90m{seed}\033[0m"
     )
     print(_BORDER)
@@ -326,7 +353,7 @@ class Policy(BasePolicy):
             while True:
                 elapsed = int(time.time() - connect_start)
                 readable, _, _ = select.select([self.listen_fd], [], [], 1.0)
-                print(f"\r  Status : WAITING {elapsed}s", end="", flush=True)
+                print(f"\r  Status : {_YELLOW}WAITING{_RESET} {elapsed}s", end="", flush=True)
                 if readable:
                     self.sock_fd, client_addr = self.listen_fd.accept()
                     break
