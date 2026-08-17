@@ -17,3 +17,8 @@ Large_D435:
   fovy: 37
   w: 640
   h: 480
+
+Spcam_OBS:
+  fovy: 70
+  w: 320
+  h: 240

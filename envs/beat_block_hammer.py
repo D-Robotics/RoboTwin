@@ -2,9 +2,11 @@ from ._base_task import Base_Task
 from .utils import *
 import sapien
 from ._GLOBAL_CONFIGS import *
-
+import pickle
 
 class beat_block_hammer(Base_Task):
+    def __init__(self):
+        super().__init__()
 
     def setup_demo(self, **kwags):
         super()._init_task_env_(**kwags)
@@ -17,15 +19,7 @@ class beat_block_hammer(Base_Task):
             convex=True,
             model_id=0,
         )
-        block_pose = rand_pose(
-            xlim=[-0.25, 0.25],
-            ylim=[-0.05, 0.15],
-            zlim=[0.76],
-            qpos=[1, 0, 0, 0],
-            rotate_rand=True,
-            rotate_lim=[0, 0, 0.5],
-        )
-        while abs(block_pose.p[0]) < 0.05 or np.sum(pow(block_pose.p[:2], 2)) < 0.001:
+        if self.rnd:
             block_pose = rand_pose(
                 xlim=[-0.25, 0.25],
                 ylim=[-0.05, 0.15],
@@ -34,6 +28,23 @@ class beat_block_hammer(Base_Task):
                 rotate_rand=True,
                 rotate_lim=[0, 0, 0.5],
             )
+            while abs(block_pose.p[0]) < 0.05 or np.sum(pow(block_pose.p[:2], 2)) < 0.001:
+                block_pose = rand_pose(
+                    xlim=[-0.25, 0.25],
+                    ylim=[-0.05, 0.15],
+                    zlim=[0.76],
+                    qpos=[1, 0, 0, 0],
+                    rotate_rand=True,
+                    rotate_lim=[0, 0, 0.5],
+                )
+            with open(f'{self.data_path}/{self.count}_pos.pkl','wb') as f:
+                pickle.dump(block_pose,f)
+            print(f'Sample Actor {self.count}')
+        else:
+            with open(f'{self.data_path}/{self.count}_pos.pkl','rb') as f:
+                block_pose = pickle.load(f)
+            if not self.silent_actor_log:
+                print(f'Load Actor {self.count}')
 
         self.block = create_box(
             scene=self,

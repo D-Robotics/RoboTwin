@@ -24,6 +24,7 @@ import trimesh
 import imageio
 import glob
 
+import matplotlib.pyplot as plt
 
 from ._GLOBAL_CONFIGS import *
 
@@ -32,12 +33,34 @@ from typing import Optional, Literal
 current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
 
+import yaml
+import cv2
+
+plt.ion()
+fig, ax = plt.subplots()
+fig.canvas.manager.set_window_title("RoboTwin")
+dpi = plt.rcParams['figure.dpi']  # 默认 100
+width_inch = 1920 / dpi
+height_inch = 720 / dpi
+fig.set_size_inches(width_inch, height_inch)
 
 class Base_Task(gym.Env):
 
     def __init__(self):
         pass
+    
+    def inter(self,img):
+        bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        up = cv2.resize(img, None, fx=self.hd, fy=self.hd, interpolation=cv2.INTER_CUBIC)
+        return up
 
+    # show img
+    def show(self,img):
+        ax.clear()
+        ax.axis('off')
+        ax.imshow(img)
+        plt.draw()
+        plt.pause(self.fresh)
     # =========================================================== Init Task Env ===========================================================
     def _init_task_env_(self, table_xy_bias=[0, 0], table_height_bias=0, **kwags):
         """
@@ -68,8 +91,26 @@ class Base_Task(gym.Env):
         self.save_data = kwags.get("save_data", False)
         self.dual_arm = kwags.get("dual_arm", True)
         self.eval_mode = kwags.get("eval_mode", False)
+        self.silent_actor_log = kwags.get("silent_actor_log", False)
 
         self.need_topp = True  # TODO
+        
+        # save sample
+        self.count = kwags['now_ep_num']
+        
+        # video config
+        data = kwags.get('cfg')
+        self.cat_dim =data['cat_dim']
+        self.fresh = data['fresh']
+        self.spcam = data['spcam']
+        self.raw_tri = data['raw_tri']
+        self.hd = data['hd']
+        
+        # dataset config
+        self.rnd = data['rnd']
+        sample = data['sample']
+        self.data_path = f'./eval_data/{self.task_name}/{sample}'
+        os.makedirs(self.data_path, exist_ok=True)     
 
         # Random
         random_setting = kwags.get("domain_randomization")
@@ -94,7 +135,6 @@ class Base_Task(gym.Env):
         self.raw_head_pcl = None
         self.real_head_pcl = None
         self.real_head_pcl_color = None
-
         self.now_obs = {}
         self.take_action_cnt = 0
         self.eval_video_path = kwags.get("eval_video_save_dir", None)
@@ -116,7 +156,6 @@ class Base_Task(gym.Env):
         self.right_cnt = 0
 
         self.instruction = None  # for Eval
-
         self.create_table_and_wall(table_xy_bias=table_xy_bias, table_height=0.74)
         self.load_robot(**kwags)
         self.load_camera(**kwags)
@@ -214,7 +253,8 @@ class Base_Task(gym.Env):
         sapien.render.set_camera_shader_dir("rt")
         sapien.render.set_ray_tracing_samples_per_pixel(32)
         sapien.render.set_ray_tracing_path_depth(8)
-        sapien.render.set_ray_tracing_denoiser("oidn")
+    #    sapien.render.set_ray_tracing_denoiser("oidn")
+        sapien.render.set_ray_tracing_denoiser("none")
 
         # declare sapien scene
         scene_config = sapien.SceneConfig()
@@ -572,8 +612,9 @@ class Base_Task(gym.Env):
         self.left_joint_path = args.get("left_joint_path", [])
         self.right_joint_path = args.get("right_joint_path", [])
 
-    def _set_eval_video_ffmpeg(self, ffmpeg):
+    def _set_eval_video_ffmpeg(self, ffmpeg=None, ffmpeg_spcam=None):
         self.eval_video_ffmpeg = ffmpeg
+        self.eval_video_ffmpeg_spcam = ffmpeg_spcam
 
     def close_env(self, clear_cache=False):
         if clear_cache:
@@ -587,6 +628,10 @@ class Base_Task(gym.Env):
             self.eval_video_ffmpeg.stdin.close()
             self.eval_video_ffmpeg.wait()
             del self.eval_video_ffmpeg
+        if self.eval_video_ffmpeg_spcam:
+            self.eval_video_ffmpeg_spcam.stdin.close()
+            self.eval_video_ffmpeg_spcam.wait()
+            del self.eval_video_ffmpeg_spcam
 
     def delay(self, delay_time, save_freq=None):
         render_freq = self.render_freq
@@ -1479,13 +1524,48 @@ class Base_Task(gym.Env):
     def take_action(self, action, action_type:Literal['qpos', 'ee']='qpos'):  # action_type: qpos or ee
         if self.take_action_cnt == self.step_lim or self.eval_success:
             return
-
         eval_video_freq = 1  # fixed
-        if (self.eval_video_path is not None and self.take_action_cnt % eval_video_freq == 0):
-            self.eval_video_ffmpeg.stdin.write(self.now_obs["observation"]["head_camera"]["rgb"].tobytes())
-
+        if (self.take_action_cnt % eval_video_freq == 0):
+            # save spcam
+            if self.spcam:
+                concatenated_rgb = np.ascontiguousarray(np.concatenate([
+                    self.now_obs["observation"]["spcam_obs_camera1"]["rgb"], 
+                    self.now_obs["observation"]["spcam_obs_camera2"]["rgb"]],
+                    axis=self.cat_dim))  
+                img = concatenated_rgb
+            elif self.raw_tri:
+                concatenated_rgb = np.ascontiguousarray(np.concatenate([
+                    self.now_obs["observation"]["left_camera"]["rgb"], 
+                    self.now_obs["observation"]["head_camera"]["rgb"],
+                    self.now_obs["observation"]["right_camera"]["rgb"]],
+                    axis=self.cat_dim))  
+                img = concatenated_rgb
+            else:
+                img = self.now_obs["observation"]["head_camera"]["rgb"]
+            img = self.inter(img)
+            if self.fresh:
+                self.show(img)
+                
+            if (self.eval_video_path is not None):
+                if self.eval_video_ffmpeg_spcam:
+                    self.eval_video_ffmpeg_spcam.stdin.write(img.tobytes())
+                elif self.eval_video_ffmpeg:
+                    self.eval_video_ffmpeg.stdin.write(img.tobytes())
         self.take_action_cnt += 1
-        print(f"step: \033[92m{self.take_action_cnt} / {self.step_lim}\033[0m", end="\r")
+        handled = False
+        if self.eval_video_path is not None:
+            try:
+                from openpi.policies.eval_progress import eval_live
+
+                handled = eval_live.update_step(self.take_action_cnt, self.step_lim)
+            except ImportError:
+                handled = False
+        if not handled:
+            print(
+                f"\r\033[Kstep: \033[92m{self.take_action_cnt} / {self.step_lim}\033[0m",
+                end="",
+                flush=True,
+            )
 
         self._update_render()
         if self.render_freq:
@@ -1653,12 +1733,33 @@ class Base_Task(gym.Env):
 
             self.scene.step()
             self._update_render()
-                
+
             if self.check_success():
                 self.eval_success = True
                 self.get_obs() # update obs
+                if self.spcam:
+                    concatenated_rgb = np.ascontiguousarray(np.concatenate([
+                        self.now_obs["observation"]["spcam_obs_camera1"]["rgb"], 
+                        self.now_obs["observation"]["spcam_obs_camera2"]["rgb"]],
+                        axis=self.cat_dim))  
+                    img = concatenated_rgb
+                elif self.raw_tri:
+                    concatenated_rgb = np.ascontiguousarray(np.concatenate([
+                        self.now_obs["observation"]["left_camera"]["rgb"], 
+                        self.now_obs["observation"]["head_camera"]["rgb"],
+                        self.now_obs["observation"]["right_camera"]["rgb"]],
+                        axis=self.cat_dim))  
+                    img = concatenated_rgb
+                else:
+                    img = self.now_obs["observation"]["head_camera"]["rgb"]
+                img = self.inter(img)
+                if self.fresh:
+                    self.show(img)
                 if (self.eval_video_path is not None):
-                    self.eval_video_ffmpeg.stdin.write(self.now_obs["observation"]["head_camera"]["rgb"].tobytes())
+                    if self.eval_video_ffmpeg_spcam:
+                        self.eval_video_ffmpeg_spcam.stdin.write(img.tobytes())
+                    elif self.eval_video_ffmpeg:
+                        self.eval_video_ffmpeg.stdin.write(img.tobytes())
                 return
 
         self._update_render()

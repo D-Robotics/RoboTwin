@@ -28,3 +28,9 @@ envs/curobo/*
 
 /*.json*
 /*.txt
+
+# 本地 docker build staging（.so 改从 envs/curobo 读取，无需提交）
+docker-vendor/
+
+# lerobot 由 prepare-docker-build.sh 在 build 前 clone，不提交 git
+policy/pi0/vendor/lerobot

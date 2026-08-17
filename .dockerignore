@@ -1,0 +1,26 @@
+**/.git
+!envs/curobo/.git
+!envs/curobo/.git/**
+**/__pycache__
+**/.venv
+**/eval_result
+**/data
+policy/pi0/checkpoints
+assets
+*.jpg
+
+# Docker 构建元文件（不进镜像，也不参与 COPY . . checksum）
+Dockerfile
+Dockerfile*
+.dockerignore
+
+# 本地 staging 目录，不提交 git，也不进镜像
+docker-vendor
+
+# 下载脚本目录，非运行时数据
+assets1
+
+# eval 数据由 Dockerfile 显式 COPY，避免改代码时连带失效
+eval_data
+!eval_data/beat_block_hammer/0
+!eval_data/beat_block_hammer/0/**

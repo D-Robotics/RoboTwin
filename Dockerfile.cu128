@@ -1,0 +1,77 @@
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 系统依赖：curobo 编译 + sapien/open3d 渲染 + 运行时
+# ubuntu24.04 无 python3.11 apt 包，改由 uv 下载 standalone CPython（与宿主机一致）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git git-lfs curl ca-certificates \
+    build-essential cmake ninja-build \
+    libegl1-mesa-dev libgl1 libglx-mesa0 libglew-dev libglfw3-dev \
+    libgles2-mesa-dev libglib2.0-0 libsm6 libxrender1 libxext6 \
+    libosmesa6-dev ffmpeg \
+    libvulkan1 vim \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 uv（升级到 0.9.18，支持 --no-install-package）
+COPY --from=ghcr.io/astral-sh/uv:0.9.18 /uv /uvx /bin/
+
+WORKDIR /workspace/RoboTwin
+
+# 复制 uv sync 构建 openpi 所需的全部文件（hatchling 需要 LICENSE）
+COPY policy/pi0/pyproject.toml policy/pi0/uv.lock policy/pi0/.python-version policy/pi0/LICENSE policy/pi0/
+COPY policy/pi0/packages policy/pi0/packages
+COPY policy/pi0/src policy/pi0/src
+COPY policy/pi0/vendor/lerobot policy/pi0/vendor/lerobot
+
+# 创建 venv：跳过 torch/torchvision（避免下载 2.6.0 再卸载重装），直接装 cu128 版
+# 全部在一个 RUN 内完成，单层无残留
+# 关键：venv 必须用 uv 托管的 standalone CPython（>=3.11.13），绝不能用
+# Ubuntu 仓库的 python3.11 —— Ubuntu 22.04 的 python3.11 包是 3.11.0rc1 预发布版，
+# 其 PEP 659 自适应特化有 bug（_Py_Specialize_StoreAttr 对 torch ScriptFunction
+# 实例存 __doc__ 时 dk=NULL 解引用），curobo 导入期 torch.jit.script 必段错误。
+RUN uv python install 3.11 && \
+    cd policy/pi0 && \
+    sed -i 's|lerobot = { git = "https://github.com/huggingface/lerobot", rev = "a445d9c9da6bea99a8972daa4fe1fdd053d711d2" }|lerobot = { path = "vendor/lerobot" }|' pyproject.toml && \
+    GIT_LFS_SKIP_SMUDGE=1 UV_LINK_MODE=copy uv sync --frozen --python 3.11 \
+        --no-install-package torch --no-install-package torchvision && \
+    . .venv/bin/activate && \
+    python -VV && \
+    python -c "import sys; assert sys.version_info >= (3, 11, 13), '必须使用 >=3.11.13 的 Python: ' + sys.version" && \
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128 && \
+    cp -r src/openpi/models_pytorch/transformers_replace/* \
+       .venv/lib/python3.11/site-packages/transformers/
+
+# curobo：使用宿主机已编译 .so（需先完成 curobo build，见 scripts/prepare-docker-build.sh）
+COPY envs/curobo envs/curobo
+RUN test -n "$(ls envs/curobo/src/curobo/curobolib/*.so 2>/dev/null)" || \
+    (echo "ERROR: 缺少 curobo .so，请先编译 curobo 或运行 bash scripts/prepare-docker-build.sh" && exit 1)
+RUN cd policy/pi0 && . .venv/bin/activate && \
+    cd ../../envs/curobo && \
+    sed -i 's/ext_modules=ext_modules/ext_modules=[]/' setup.py && \
+    sed -i 's/cmdclass={"build_ext": BuildExtension}/cmdclass={}/' setup.py && \
+    pip install -e . --no-build-isolation && \
+    pip install warp-lang==1.8.0
+
+# 构建期冒烟测试：curobo 导入会触发 torch.jit.script（纯 CPU，无需 GPU），
+# 若 venv 解释器是 3.11.0rc1 会在此段错误，让构建直接失败而不是运行时才崩
+RUN cd policy/pi0 && . .venv/bin/activate && \
+    python -c "import curobo.graph.graph_base; import curobo.types.math; print('curobo import OK')"
+
+# 运行时环境变量（稳定，置于 COPY . . 之前，改代码时不重跑）
+# LD_LIBRARY_PATH 加入 /usr/local/cuda/lib64，与宿主机环境一致
+ENV VIRTUAL_ENV=/workspace/RoboTwin/policy/pi0/.venv \
+    PATH="/workspace/RoboTwin/policy/pi0/.venv/bin:${PATH}" \
+    PYTHONPATH=/workspace/RoboTwin:/workspace/RoboTwin/policy/pi0/src \
+    NVIDIA_DRIVER_CAPABILITIES=graphics,utility,compute \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu:/workspace/RoboTwin/policy/pi0/.venv/lib/python3.11/site-packages/torch/lib \
+    VK_ICD_FILENAMES=/workspace/RoboTwin/policy/pi0/.venv/lib/python3.11/site-packages/sapien/vulkan_library/nvidia_icd.json
+
+# 再复制完整代码（排除项见 .dockerignore，envs/curobo/.git 已由 .dockerignore 反排除带入）
+COPY . .
+
+# 本地化补丁：tokenizer 指向镜像内本地文件，避免运行时联网下载
+RUN sed -i 's|path = download.maybe_download("gs://big_vision/paligemma_tokenizer.model", gs={"token": "anon"})|path = Path("/workspace/RoboTwin/policy/pi0/src/openpi/shared/big_vision/paligemma_tokenizer.model")|' \
+    policy/pi0/src/openpi/models/tokenizer.py
+
+CMD ["/bin/bash"]

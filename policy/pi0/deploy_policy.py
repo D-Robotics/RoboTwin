@@ -9,6 +9,7 @@ sys.path.append(parent_directory)
 
 from pi_model import *
 
+# config.yaml
 
 # Encode observation for the model
 def encode_obs(observation):
@@ -23,23 +24,27 @@ def encode_obs(observation):
 
 
 def get_model(usr_args):
-    train_config_name, model_name, checkpoint_id, pi0_step = (usr_args["train_config_name"], usr_args["model_name"],
-                                                              usr_args["checkpoint_id"], usr_args["pi0_step"])
-    return PI0(train_config_name, model_name, checkpoint_id, pi0_step)
+    train_config_name, model_name, checkpoint_id, pi0_step, cfg = (usr_args["train_config_name"], usr_args["model_name"],
+                                                              usr_args["checkpoint_id"], usr_args["pi0_step"], usr_args["cfg"])
+    return PI0(train_config_name, model_name, checkpoint_id, pi0_step, cfg)
 
 
-def eval(TASK_ENV, model, observation):
+def eval(TASK_ENV, model, observation, reset=False):
 
     if model.observation_window is None:
         instruction = TASK_ENV.get_instruction()
         model.set_language(instruction)
 
     input_rgb_arr, input_state = encode_obs(observation)
-    model.update_observation_window(input_rgb_arr, input_state)
+    model.update_observation_window(input_rgb_arr, input_state, reset=reset)
 
     # ======== Get Action ========
 
-    actions = model.get_action()[:model.pi0_step]
+    actions = model.get_action(
+        reset,
+        env_step=TASK_ENV.take_action_cnt,
+        env_step_lim=TASK_ENV.step_lim,
+    )[:model.pi0_step]
 
     for action in actions:
         TASK_ENV.take_action(action)

@@ -62,7 +62,6 @@ def posemb_sincos(pos: at.Real[at.Array, " b"], embedding_dim: int, min_period: 
     )
     return jnp.concatenate([jnp.sin(sinusoid_input), jnp.cos(sinusoid_input)], axis=-1)
 
-
 @dataclasses.dataclass(frozen=True)
 class Pi0Config(_model.BaseModelConfig):
     dtype: str = "bfloat16"
@@ -72,11 +71,25 @@ class Pi0Config(_model.BaseModelConfig):
     # Set the model specific defaults.
     action_dim: int = 32
     action_horizon: int = 50
-    max_token_len: int = 48
+    max_token_len: int = None  # type: ignore
+    # Pi05 has two differences from Pi0:
+    # - the state input is part of the discrete language tokens rather than a continuous input that is part of the suffix
+    # - the action expert uses adaRMSNorm to inject the flow matching timestep
+    pi05: bool = False
+    # This config option is not used directly by the model, but it is read by the ModelTransformFactory.
+    discrete_state_input: bool = None  # type: ignore
+
+    def __post_init__(self):
+        if self.max_token_len is None:
+            object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)
+        if self.discrete_state_input is None:
+            object.__setattr__(self, "discrete_state_input", self.pi05)
 
     @property
     @override
     def model_type(self) -> _model.ModelType:
+        if self.pi05:
+            return _model.ModelType.PI05
         return _model.ModelType.PI0
 
     @override
@@ -163,7 +176,7 @@ class Pi0(_model.BaseModel):
 
     @at.typecheck
     def embed_prefix(
-        self, obs: _model.Observation
+        self, obs: _model.Observation,
     ) -> tuple[at.Float[at.Array, "b s emb"], at.Bool[at.Array, "b s"], at.Bool[at.Array, " s"]]:
         input_mask = []
         ar_mask = []
@@ -191,6 +204,7 @@ class Pi0(_model.BaseModel):
         tokens = jnp.concatenate(tokens, axis=1)
         input_mask = jnp.concatenate(input_mask, axis=1)
         ar_mask = jnp.array(ar_mask)
+                
         return tokens, input_mask, ar_mask
 
     @at.typecheck
@@ -206,7 +220,7 @@ class Pi0(_model.BaseModel):
         input_mask.append(jnp.ones((obs.state.shape[0], 1), dtype=jnp.bool_))
         # image/language inputs do not attend to state or actions
         ar_mask += [True]
-
+        
         # embed timestep using sine-cosine positional encoding with sensitivity in the range [0, 1]
         time_emb = posemb_sincos(timestep, self.action_in_proj.out_features, min_period=4e-3, max_period=4.0)
         # mix timestep + action information using an MLP
@@ -223,6 +237,7 @@ class Pi0(_model.BaseModel):
         tokens = jnp.concatenate(tokens, axis=1)
         input_mask = jnp.concatenate(input_mask, axis=1)
         ar_mask = jnp.array(ar_mask)
+
         return tokens, input_mask, ar_mask
 
     @override
@@ -264,17 +279,20 @@ class Pi0(_model.BaseModel):
         *,
         num_steps: int | at.Int[at.Array, ""] = 10,
     ) -> _model.Actions:
+
         observation = _model.preprocess_observation(None, observation, train=False)
-        # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
-        # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
+
         dt = -1.0 / num_steps
         batch_size = observation.state.shape[0]
         noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
 
         # first fill KV cache with a forward pass of the prefix
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+
         prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
+
         positions = jnp.cumsum(prefix_mask, axis=1) - 1
+
         _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
 
         def step(carry):
@@ -286,9 +304,11 @@ class Pi0(_model.BaseModel):
             suffix_attn_mask = make_attn_mask(suffix_mask, suffix_ar_mask)
             # `prefix_attn_mask` is shape (b, suffix_len, prefix_len) indicating how the suffix tokens can attend to the
             # prefix tokens
+
             prefix_attn_mask = einops.repeat(prefix_mask, "b p -> b s p", s=suffix_tokens.shape[1])
             # `combined_mask` is shape (b, suffix_len, prefix_len + suffix_len) indicating how the suffix tokens (which
             # generate the queries) can attend to the full prefix + suffix sequence (which generates the keys and values)
+
             full_attn_mask = jnp.concatenate([prefix_attn_mask, suffix_attn_mask], axis=-1)
             assert full_attn_mask.shape == (
                 batch_size,
@@ -297,7 +317,6 @@ class Pi0(_model.BaseModel):
             )
             # `positions` is shape (b, suffix_len) indicating the positions of the suffix tokens
             positions = jnp.sum(prefix_mask, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
-
             (prefix_out, suffix_out), _ = self.PaliGemma.llm([None, suffix_tokens],
                                                              mask=full_attn_mask,
                                                              positions=positions,

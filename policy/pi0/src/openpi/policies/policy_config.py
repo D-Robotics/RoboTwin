@@ -1,7 +1,7 @@
-from collections.abc import Sequence
-import dataclasses
 import logging
+import os
 import pathlib
+from pathlib import Path
 from typing import Any
 
 import jax.numpy as jnp
@@ -13,19 +13,7 @@ from openpi.training import checkpoints as _checkpoints
 from openpi.training import config as _config
 import openpi.transforms as transforms
 
-
-@dataclasses.dataclass
-class PolicyConfig:
-    model: _model.BaseModel
-    norm_stats: dict[str, transforms.NormStats]
-
-    input_layers: Sequence[transforms.DataTransformFn]
-    output_layers: Sequence[transforms.DataTransformFn]
-
-    model_type: _model.ModelType = _model.ModelType.PI0
-    default_prompt: str | None = None
-    sample_kwargs: dict[str, Any] | None = None
-
+OBS, SKIP, FULL = range(3)
 
 def create_trained_policy(
     train_config: _config.TrainConfig,
@@ -36,6 +24,8 @@ def create_trained_policy(
     default_prompt: str | None = None,
     norm_stats: dict[str, transforms.NormStats] | None = None,
     robotwin_repo_id: str | None = None,
+    pytorch_device: str | None = None,
+    cfg = None
 ) -> _policy.Policy:
     """Create a policy from a trained checkpoint.
 
@@ -49,23 +39,56 @@ def create_trained_policy(
             data if it doesn't already exist.
         norm_stats: The norm stats to use for the policy. If not provided, the norm stats will be loaded
             from the checkpoint directory.
+        pytorch_device: Device to use for PyTorch models (e.g., "cpu", "cuda", "cuda:0").
+                      If None and is_pytorch=True, will use "cuda" if available, otherwise "cpu".
+
+    Note:
+        The function automatically detects whether the model is PyTorch-based by checking for the
+        presence of "model.safensors" in the checkpoint directory.
     """
     repack_transforms = repack_transforms or transforms.Group()
-    checkpoint_dir = download.maybe_download(str(checkpoint_dir))
+    checkpoint_dir = Path(str(checkpoint_dir))
 
-    logging.info("Loading model...")
-    model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
+    # Check if this is a PyTorch model by looking for model.safetensors
+    weight_path = os.path.join(checkpoint_dir, "model.safetensors")
+    is_pytorch = os.path.exists(weight_path)
 
+    # read config
+    data = cfg
+    stage = data['stage']
+    use_cpp = data['use_cpp'] and stage == FULL
+    do_preproc = data['do_preproc']
+    do_postproc = data['do_postproc']
+    need_norm = stage != FULL or do_preproc or do_postproc
+    
+    if use_cpp:
+        print("Remote inference enabled (local Torch model skipped).")
+        model = None
+    elif is_pytorch:
+        print(f"Loading model from {weight_path}...")
+        model = train_config.model.load_pytorch(train_config, weight_path)
+        model.paligemma_with_expert.to_bfloat16_for_selected_params("bfloat16")
+    else:
+        print(f"Loading model from {checkpoint_dir}/params...")
+        model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
-    if norm_stats is None:
+
+    if norm_stats is None and need_norm:
         # We are loading the norm stats from the checkpoint instead of the config assets dir to make sure
         # that the policy is using the same normalization stats as the original training process.
         if data_config.asset_id is None:
             raise ValueError("Asset id is required to load norm stats.")
-        # print(f"!!!!{data_config.asset_id}")
-        # print(robotwin_repo_id)
         data_config.asset_id = robotwin_repo_id
         norm_stats = _checkpoints.load_norm_stats(checkpoint_dir / "assets", data_config.asset_id)
+
+    # Determine the device to use for PyTorch models
+    if is_pytorch and pytorch_device is None:
+        try:
+            import torch
+
+            pytorch_device = "cuda" if torch.cuda.is_available() else "cpu"
+        except ImportError:
+            pytorch_device = "cpu"
 
     return _policy.Policy(
         model,
@@ -84,4 +107,7 @@ def create_trained_policy(
         ],
         sample_kwargs=sample_kwargs,
         metadata=train_config.policy_metadata,
+        is_pytorch=is_pytorch,
+        pytorch_device=pytorch_device if is_pytorch else None,
+        cfg = data
     )

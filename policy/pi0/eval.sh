@@ -10,6 +10,10 @@ model_name=${4}
 seed=${5}
 gpu_id=${6}
 
+# add
+#export XLA_FLAGS="--xla_gpu_autotune_level=0"
+#export XLA_PYTHON_CLIENT_MEM_FRACTION=0.4 # ensure GPU < 24G
+
 export CUDA_VISIBLE_DEVICES=${gpu_id}
 echo -e "\033[33mgpu id (to use): ${gpu_id}\033[0m"
 
