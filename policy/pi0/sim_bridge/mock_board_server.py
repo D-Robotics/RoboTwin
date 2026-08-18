@@ -39,39 +39,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "sim_bridge"))
-import msg_pb2  # noqa: E402
-
-
-# ---------- protobuf wire helpers (mirror vla_demo_network.h) ----------
-def _send_msg(sock, msg):
-    data = msg.SerializeToString()
-    sock.sendall(len(data).to_bytes(4, "big") + data)
-
-
-def _recvall(sock, n):
-    chunks = []
-    got = 0
-    while got < n:
-        b = sock.recv(min(n - got, 65536))
-        if not b:
-            return None
-        chunks.append(b)
-        got += len(b)
-    return b"".join(chunks)
-
-
-def _recv_msg(sock):
-    hdr = _recvall(sock, 4)
-    if not hdr:
-        return None
-    n = int.from_bytes(hdr, "big")
-    body = _recvall(sock, n)
-    if body is None:
-        return None
-    m = msg_pb2.MultiModalInput()
-    m.ParseFromString(body)
-    return m
+sys.path.insert(0, os.path.join(HERE, "..", "src"))  # for openpi.patch
+from openpi.patch import msg_pb2  # noqa: E402
+from openpi.patch.wire import send_msg as _send_msg, recv_msg as _recv_msg  # noqa: E402
 
 
 def build_action(pi0_step, state_dim):

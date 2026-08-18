@@ -459,9 +459,8 @@ class Policy(BasePolicy):
                 serialized_data = msg.SerializeToString()
                 data_len = len(serialized_data)
 
-                # 2. 关键：长度字段按大端字节序打包
-                net_len = socket.htonl(data_len)  # 主机序→网络序（大端）
-                net_len_bytes = struct.pack("<I", net_len)  # 大端打包为 4 字节
+                # 2. 长度字段按大端打包（4 字节），与 wire.py 一致
+                net_len_bytes = data_len.to_bytes(4, "big")
 
                 assert len(net_len_bytes) == 4, f"长度字段应为4字节，实际{len(net_len_bytes)}字节"
 
@@ -497,10 +496,8 @@ class Policy(BasePolicy):
                         live_io.complete_recv(False)
                     return False
 
-                # 关键：用 ">I"（大端）解析 4 字节无符号整数
-                net_len = struct.unpack("<I", net_len_data)[0]
-                # 网络序转主机序（小端系统必须，大系端统可省略）
-                data_len = socket.ntohl(net_len)
+                # 大端解析 4 字节长度，与 wire.py 一致
+                data_len = int.from_bytes(net_len_data, "big")
 
                 # 接收数据
                 serialized_data = b""

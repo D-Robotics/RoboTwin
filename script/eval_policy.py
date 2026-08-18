@@ -29,6 +29,7 @@ import imageio_ffmpeg as ffmpeg
 ffmpeg_path = ffmpeg.get_ffmpeg_exe()
 
 from generate_episode_instructions import *
+from eval_args import build_task_args
 
 current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
@@ -105,6 +106,38 @@ def get_embodiment_config(robot_file):
     return embodiment_args
 
 
+def _make_ffmpeg(video_size, out_path, scale_hd=1):
+    """创建 ffmpeg subprocess，接收原始尺寸 rgb24 帧，可选 HD 放大输出。"""
+    args = [
+        ffmpeg_path,
+        "-y",
+        "-loglevel",
+        "error",
+        "-f",
+        "rawvideo",
+        "-pixel_format",
+        "rgb24",
+        "-video_size",
+        video_size,
+        "-framerate",
+        "10",
+        "-i",
+        "-",
+    ]
+    if scale_hd > 1:
+        args.extend(["-vf", f"scale=iw*{scale_hd}:ih*{scale_hd}"])
+    args.extend([
+        "-pix_fmt",
+        "yuv420p",
+        "-vcodec",
+        "libx264",
+        "-crf",
+        "23",
+        out_path,
+    ])
+    return subprocess.Popen(args, stdin=subprocess.PIPE)
+
+
 def main(usr_args):
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     task_name = usr_args["task_name"]
@@ -123,53 +156,14 @@ def main(usr_args):
         data = yaml.safe_load(f)
 
     USE_SPCAM_CAMERA = data["spcam"]
-    RAW_TRI = data["raw_tri"]
-    CAT_DIM = data["cat_dim"]
     RESTORE = data["restore"]
     HD = data["hd"]
 
     get_model = eval_function_decorator(policy_name, "get_model")
 
-    with open(f"./task_config/{task_config}.yml", "r", encoding="utf-8") as f:
-        args = yaml.load(f.read(), Loader=yaml.FullLoader)
-
-    args["task_name"] = task_name
-    args["task_config"] = task_config
-    args["ckpt_setting"] = ckpt_setting
-
+    args = build_task_args(task_name, task_config, ckpt_setting, root=".",
+                           get_embodiment_config_fn=get_embodiment_config)
     embodiment_type = args.get("embodiment")
-    embodiment_config_path = os.path.join(CONFIGS_PATH, "_embodiment_config.yml")
-
-    with open(embodiment_config_path, "r", encoding="utf-8") as f:
-        _embodiment_types = yaml.load(f.read(), Loader=yaml.FullLoader)
-
-    def get_embodiment_file(embodiment_type):
-        robot_file = _embodiment_types[embodiment_type]["file_path"]
-        if robot_file is None:
-            raise "No embodiment files"
-        return robot_file
-
-    with open(CONFIGS_PATH + "_camera_config.yml", "r", encoding="utf-8") as f:
-        _camera_config = yaml.load(f.read(), Loader=yaml.FullLoader)
-
-    head_camera_type = args["camera"]["head_camera_type"]
-    args["head_camera_h"] = _camera_config[head_camera_type]["h"]
-    args["head_camera_w"] = _camera_config[head_camera_type]["w"]
-
-    if len(embodiment_type) == 1:
-        args["left_robot_file"] = get_embodiment_file(embodiment_type[0])
-        args["right_robot_file"] = get_embodiment_file(embodiment_type[0])
-        args["dual_arm_embodied"] = True
-    elif len(embodiment_type) == 3:
-        args["left_robot_file"] = get_embodiment_file(embodiment_type[0])
-        args["right_robot_file"] = get_embodiment_file(embodiment_type[1])
-        args["embodiment_dis"] = embodiment_type[2]
-        args["dual_arm_embodied"] = False
-    else:
-        raise "embodiment items should be 1 or 3"
-
-    args["left_embodiment_config"] = get_embodiment_config(args["left_robot_file"])
-    args["right_embodiment_config"] = get_embodiment_config(args["right_robot_file"])
 
     if len(embodiment_type) == 1:
         embodiment_name = str(embodiment_type[0])
@@ -185,37 +179,10 @@ def main(usr_args):
         video_save_dir = save_dir
         if USE_SPCAM_CAMERA:
             camera_config = get_camera_config("Spcam_OBS")
-            if CAT_DIM == 0:
-                video_size = (
-                    str(camera_config["w"] * HD)
-                    + "x"
-                    + str(camera_config["h"] * 2 * HD)
-                )
-            else:
-                video_size = (
-                    str(camera_config["w"] * 2 * HD)
-                    + "x"
-                    + str(camera_config["h"] * HD)
-                )
-        elif RAW_TRI:
-            camera_config = get_camera_config(args["camera"]["head_camera_type"])
-            if CAT_DIM == 0:
-                video_size = (
-                    str(camera_config["w"] * HD)
-                    + "x"
-                    + str(camera_config["h"] * 3 * HD)
-                )
-            else:
-                video_size = (
-                    str(camera_config["w"] * 3 * HD)
-                    + "x"
-                    + str(camera_config["h"] * HD)
-                )
+            video_size = str(camera_config["w"] * 2) + "x" + str(camera_config["h"])
         else:
             camera_config = get_camera_config(args["camera"]["head_camera_type"])
-            video_size = (
-                str(camera_config["w"] * HD) + "x" + str(camera_config["h"] * HD)
-            )
+            video_size = str(camera_config["w"]) + "x" + str(camera_config["h"])
         video_save_dir.mkdir(parents=True, exist_ok=True)
         args["eval_video_save_dir"] = video_save_dir
 
@@ -304,6 +271,7 @@ def main(usr_args):
         temp_path=temp_path,
         yaml_path=yaml_path,
         restore=RESTORE,
+        hd=HD,
     )
     suc_nums.append(suc_num)
 
@@ -337,6 +305,7 @@ def eval_policy(
     temp_path=None,
     yaml_path=None,
     restore=False,
+    hd=1,
 ):
     expert_check = True
     TASK_ENV.suc = 0
@@ -452,27 +421,15 @@ def eval_policy(
             pickle.dump(suc_list, f)
 
         if USE_SPCAM_CAMERA:
-            spcam_obs_camera1 = {
-                "name": "spcam_obs_camera1",
-                "type": "Spcam_OBS",
-                "position": [-0.032, -0.45, 1.35],
-                "forward": [0, 0.6, -0.8],
-                "left": [-1, 0, 0],
-            }
-            spcam_obs_camera2 = {
-                "name": "spcam_obs_camera2",
-                "type": "Spcam_OBS",
-                "position": [-0.5, -0.05, 1.15],  # 相机位置不变
-                "forward": [0.6, 0, -0.8],  # z 分量更负 → 向下更多
-                "left": [0, 1, 0],  # 保持 left 向量
-            }
-
-            args["left_embodiment_config"]["static_camera_list"].append(
-                spcam_obs_camera1
-            )
-            args["left_embodiment_config"]["static_camera_list"].append(
-                spcam_obs_camera2
-            )
+            spcam_cfg = _camera_config["Spcam_OBS"]
+            for cam in spcam_cfg.get("cameras", []):
+                args["left_embodiment_config"]["static_camera_list"].append({
+                    "name": cam["name"],
+                    "type": "Spcam_OBS",
+                    "position": cam["position"],
+                    "forward": cam["forward"],
+                    "left": cam["left"],
+                })
 
         if expert_check:
             try:
@@ -539,68 +496,9 @@ def eval_policy(
         TASK_ENV.set_instruction(instruction=instruction)  # set language instruction
         if USE_VIDEO:
             if TASK_ENV.eval_video_path is not None:
-                ffmpeg = (
-                    subprocess.Popen(
-                        [
-                            #  "ffmpeg",
-                            ffmpeg_path,
-                            "-y",
-                            "-loglevel",
-                            "error",
-                            "-f",
-                            "rawvideo",
-                            "-pixel_format",
-                            "rgb24",
-                            "-video_size",
-                            video_size,
-                            "-framerate",
-                            "10",
-                            "-i",
-                            "-",
-                            "-pix_fmt",
-                            "yuv420p",
-                            "-vcodec",
-                            "libx264",
-                            "-crf",
-                            "23",
-                            f"{TASK_ENV.eval_video_path}/episode{TASK_ENV.test_num}.mp4",
-                        ],
-                        stdin=subprocess.PIPE,
-                    )
-                    if not USE_SPCAM_CAMERA
-                    else None
-                )
-                ffmpeg_spcam = (
-                    subprocess.Popen(
-                        [
-                            #  "ffmpeg",
-                            ffmpeg_path,
-                            "-y",
-                            "-loglevel",
-                            "error",
-                            "-f",
-                            "rawvideo",
-                            "-pixel_format",
-                            "rgb24",
-                            "-video_size",
-                            video_size,
-                            "-framerate",
-                            "10",
-                            "-i",
-                            "-",
-                            "-pix_fmt",
-                            "yuv420p",
-                            "-vcodec",
-                            "libx264",
-                            "-crf",
-                            "23",
-                            f"{TASK_ENV.eval_video_path}/episode{TASK_ENV.test_num}.mp4",
-                        ],
-                        stdin=subprocess.PIPE,
-                    )
-                    if USE_SPCAM_CAMERA
-                    else None
-                )
+                out_path = f"{TASK_ENV.eval_video_path}/episode{TASK_ENV.test_num}.mp4"
+                ffmpeg = _make_ffmpeg(video_size, out_path, scale_hd=hd) if not USE_SPCAM_CAMERA else None
+                ffmpeg_spcam = _make_ffmpeg(video_size, out_path, scale_hd=hd) if USE_SPCAM_CAMERA else None
                 TASK_ENV._set_eval_video_ffmpeg(ffmpeg, ffmpeg_spcam)
         else:
             TASK_ENV._set_eval_video_ffmpeg()

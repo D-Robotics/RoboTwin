@@ -34,44 +34,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import msg_pb2  # noqa: E402
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)  # for env_wrapper
+sys.path.insert(0, os.path.join(_HERE, "..", "src"))  # for openpi.patch
+from openpi.patch import msg_pb2  # noqa: E402
+from openpi.patch.wire import send_msg as _send_msg, recv_msg as _recv_msg  # noqa: E402
 from env_wrapper import SimEnv, StubSimEnv  # noqa: E402
 
 
 def _now_stamp():
     t = time.time()
     return int(t), int((t - int(t)) * 1e9)
-
-
-def _send_msg(sock: socket.socket, msg: msg_pb2.MultiModalInput):
-    data = msg.SerializeToString()
-    sock.sendall(len(data).to_bytes(4, "big") + data)
-
-
-def _recvall(sock: socket.socket, n: int):
-    chunks = []
-    got = 0
-    while got < n:
-        b = sock.recv(min(n - got, 65536))
-        if not b:
-            return None
-        chunks.append(b)
-        got += len(b)
-    return b"".join(chunks)
-
-
-def _recv_msg(sock: socket.socket):
-    hdr = _recvall(sock, 4)
-    if not hdr:
-        return None
-    n = int.from_bytes(hdr, "big")
-    body = _recvall(sock, n)
-    if body is None:
-        return None
-    msg = msg_pb2.MultiModalInput()
-    msg.ParseFromString(body)
-    return msg
 
 
 def build_obs(rgb_list, state, instruction, reset, seq, view_only=False):

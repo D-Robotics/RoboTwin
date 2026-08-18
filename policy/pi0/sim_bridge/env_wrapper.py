@@ -236,7 +236,7 @@ class SimEnv:
       - eval_video_log forced False (no ffmpeg video recording).
       - expert_check / play_once seed validation skipped; when no
         instruction is given (caller/HTTP/CLI or TASK_ENV), a fresh
-        'unseen' instruction is generated like eval_policy.py:517-522 so
+        'unseen' instruction is generated so
         the board never sees an empty prompt.
     """
 
@@ -289,58 +289,18 @@ class SimEnv:
         ep = self._import_helpers()
         import yaml
         from envs import CONFIGS_PATH
-        # `args` = per-task config (NOT the global config.yaml).
-        with open(os.path.join(self.root, "task_config",
-                               f"{self.task_config}.yml"), "r",
-                  encoding="utf-8") as f:
-            args = yaml.load(f.read(), Loader=yaml.FullLoader)
-        args["task_name"] = task
-        args["task_config"] = self.task_config
-        args["ckpt_setting"] = task
+        from eval_args import build_task_args
+        args = build_task_args(task, self.task_config, task, root=self.root,
+                               get_embodiment_config_fn=ep.get_embodiment_config,
+                               default_embodiment=["aloha-agilex"])
         args["policy_name"] = "pi0"
         args["instruction_type"] = "unseen"
         args["eval_mode"] = True
         args["render_freq"] = 0
-        args["eval_video_log"] = False  # bridge: no ffmpeg recording
+        args["eval_video_log"] = False
         args.pop("eval_video_save_dir", None)
 
-        embodiment_type = args.get("embodiment") or ["aloha-agilex"]
-        with open(os.path.join(CONFIGS_PATH, "_embodiment_config.yml"), "r",
-                  encoding="utf-8") as f:
-            emb = yaml.load(f.read(), Loader=yaml.FullLoader)
-
-        def _emb_file(t):
-            rf = emb[t]["file_path"]
-            if rf is None:
-                raise RuntimeError(f"no embodiment file for {t}")
-            return rf
-
-        if len(embodiment_type) == 1:
-            args["left_robot_file"] = _emb_file(embodiment_type[0])
-            args["right_robot_file"] = _emb_file(embodiment_type[0])
-            args["dual_arm_embodied"] = True
-        elif len(embodiment_type) == 3:
-            args["left_robot_file"] = _emb_file(embodiment_type[0])
-            args["right_robot_file"] = _emb_file(embodiment_type[1])
-            args["embodiment_dis"] = embodiment_type[2]
-            args["dual_arm_embodied"] = False
-        else:
-            raise RuntimeError("embodiment items should be 1 or 3")
-        args["left_embodiment_config"] = ep.get_embodiment_config(
-            args["left_robot_file"])
-        args["right_embodiment_config"] = ep.get_embodiment_config(
-            args["right_robot_file"])
-
-        with open(os.path.join(CONFIGS_PATH, "_camera_config.yml"), "r",
-                  encoding="utf-8") as f:
-            cam = yaml.load(f.read(), Loader=yaml.FullLoader)
-        ht = args["camera"]["head_camera_type"]
-        args["head_camera_h"] = cam[ht]["h"]
-        args["head_camera_w"] = cam[ht]["w"]
-
-        # Global config.yaml -> args["cfg"], and embodiment camera-list trim,
-        # mirroring eval_policy.py:395-402. _init_task_env_ reads
-        # kwags['cfg'] for cat_dim/spcam/raw_tri/hd/rnd/sample/fresh.
+        # Global config.yaml -> args["cfg"]; trim static_camera_list.
         with open(os.path.join(self.root, "task_config", "config.yaml"),
                   "r", encoding="utf-8") as f:
             data = yaml.load(f.read(), Loader=yaml.FullLoader)
@@ -383,7 +343,7 @@ class SimEnv:
         return info
 
     def _generate_instruction(self):
-        """Generate a fresh 'unseen' instruction like eval_policy.py:517-522:
+        """Generate a fresh 'unseen' instruction:
         generate_episode_descriptions(task, [episode_info], max) then
         np.random.choice(results[0]["unseen"]). Falls back to a plain
         default if generation is impossible (env not ready / no templates)."""
@@ -425,8 +385,8 @@ class SimEnv:
             self.instruction = instruction
         if self._args is None or self._args.get("task_name") != self.task:
             self._args = self._build_args(self.task)
-        # config.yaml test_num bounds the episode count (eval_policy.py:288
-        # uses it as the loop limit; without it the bridge runs past the
+        # config.yaml test_num bounds the episode count
+        # (uses it as the loop limit; without it the bridge runs past the
         # last eval_data/<task>/<sample>/<N>_pos.pkl into FileNotFoundError).
         # Re-read the web-editable keys on every reset so edits take effect
         # on the next episode.
@@ -452,8 +412,8 @@ class SimEnv:
             except Exception:
                 self.instruction = ""
         if not self.instruction:
-            # eval_policy.py:517-522 generates a per-episode "unseen"
-            # instruction via generate_episode_descriptions(play_once info).
+            # Generate a per-episode "unseen" instruction
+            # via generate_episode_descriptions(play_once info).
             # Bridge skips play_once, so rebuild the same info dict from the
             # env (arm from block position) and generate. This fixes the
             # empty "Task: " prompt that previously reached the board.

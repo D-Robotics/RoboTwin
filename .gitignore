@@ -2,6 +2,7 @@ models/
 data/*
 !data/process_stuck.py
 __pycache__/
+*.pyc
 **/checkpoints/
 result/
 envs/curobo

@@ -29,7 +29,4 @@ use_video: true                           # 是否保存视频
 save_frame: false                         # 是否保存原始 obs 到录像目录（每 episode 一个文件夹）
 save_all_frames: false                    # false: 仅保存推理帧；true: 保存仿真每一步的 obs
 spcam: false                              # 是否使用自定义camera，在_camera_config.yaml调整分辨率，在eval_policy.py中调整角度
-raw_tri: false
-cat_dim: 1                                # 拼接维度：0 竖拼，1 横拼
-fresh: 0                                  # 图像刷新时间，0为不显示图像
-hd: 2                                     # 图像放大倍数
+hd: 2                                     # 图像放大倍数（eval_policy video_size 计算）

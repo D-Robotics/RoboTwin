@@ -24,8 +24,6 @@ import trimesh
 import imageio
 import glob
 
-import matplotlib.pyplot as plt
-
 from ._GLOBAL_CONFIGS import *
 
 from typing import Optional, Literal
@@ -36,31 +34,11 @@ parent_directory = os.path.dirname(current_file_path)
 import yaml
 import cv2
 
-plt.ion()
-fig, ax = plt.subplots()
-fig.canvas.manager.set_window_title("RoboTwin")
-dpi = plt.rcParams['figure.dpi']  # 默认 100
-width_inch = 1920 / dpi
-height_inch = 720 / dpi
-fig.set_size_inches(width_inch, height_inch)
-
 class Base_Task(gym.Env):
 
     def __init__(self):
         pass
     
-    def inter(self,img):
-        bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-        up = cv2.resize(img, None, fx=self.hd, fy=self.hd, interpolation=cv2.INTER_CUBIC)
-        return up
-
-    # show img
-    def show(self,img):
-        ax.clear()
-        ax.axis('off')
-        ax.imshow(img)
-        plt.draw()
-        plt.pause(self.fresh)
     # =========================================================== Init Task Env ===========================================================
     def _init_task_env_(self, table_xy_bias=[0, 0], table_height_bias=0, **kwags):
         """
@@ -100,11 +78,7 @@ class Base_Task(gym.Env):
         
         # video config
         data = kwags.get('cfg')
-        self.cat_dim =data['cat_dim']
-        self.fresh = data['fresh']
         self.spcam = data['spcam']
-        self.raw_tri = data['raw_tri']
-        self.hd = data['hd']
         
         # dataset config
         self.rnd = data['rnd']
@@ -1521,31 +1495,21 @@ class Base_Task(gym.Env):
 
         return True  # TODO: maybe need try error
 
+    def _compose_video_frame(self):
+        """组装视频帧: spcam 双摄横拼 / 单 head"""
+        if self.spcam:
+            return np.ascontiguousarray(np.concatenate([
+                self.now_obs["observation"]["spcam_obs_camera1"]["rgb"],
+                self.now_obs["observation"]["spcam_obs_camera2"]["rgb"]],
+                axis=1))
+        return self.now_obs["observation"]["head_camera"]["rgb"]
+
     def take_action(self, action, action_type:Literal['qpos', 'ee']='qpos'):  # action_type: qpos or ee
         if self.take_action_cnt == self.step_lim or self.eval_success:
             return
         eval_video_freq = 1  # fixed
         if (self.take_action_cnt % eval_video_freq == 0):
-            # save spcam
-            if self.spcam:
-                concatenated_rgb = np.ascontiguousarray(np.concatenate([
-                    self.now_obs["observation"]["spcam_obs_camera1"]["rgb"], 
-                    self.now_obs["observation"]["spcam_obs_camera2"]["rgb"]],
-                    axis=self.cat_dim))  
-                img = concatenated_rgb
-            elif self.raw_tri:
-                concatenated_rgb = np.ascontiguousarray(np.concatenate([
-                    self.now_obs["observation"]["left_camera"]["rgb"], 
-                    self.now_obs["observation"]["head_camera"]["rgb"],
-                    self.now_obs["observation"]["right_camera"]["rgb"]],
-                    axis=self.cat_dim))  
-                img = concatenated_rgb
-            else:
-                img = self.now_obs["observation"]["head_camera"]["rgb"]
-            img = self.inter(img)
-            if self.fresh:
-                self.show(img)
-                
+            img = self._compose_video_frame()
             if (self.eval_video_path is not None):
                 if self.eval_video_ffmpeg_spcam:
                     self.eval_video_ffmpeg_spcam.stdin.write(img.tobytes())
@@ -1737,24 +1701,7 @@ class Base_Task(gym.Env):
             if self.check_success():
                 self.eval_success = True
                 self.get_obs() # update obs
-                if self.spcam:
-                    concatenated_rgb = np.ascontiguousarray(np.concatenate([
-                        self.now_obs["observation"]["spcam_obs_camera1"]["rgb"], 
-                        self.now_obs["observation"]["spcam_obs_camera2"]["rgb"]],
-                        axis=self.cat_dim))  
-                    img = concatenated_rgb
-                elif self.raw_tri:
-                    concatenated_rgb = np.ascontiguousarray(np.concatenate([
-                        self.now_obs["observation"]["left_camera"]["rgb"], 
-                        self.now_obs["observation"]["head_camera"]["rgb"],
-                        self.now_obs["observation"]["right_camera"]["rgb"]],
-                        axis=self.cat_dim))  
-                    img = concatenated_rgb
-                else:
-                    img = self.now_obs["observation"]["head_camera"]["rgb"]
-                img = self.inter(img)
-                if self.fresh:
-                    self.show(img)
+                img = self._compose_video_frame()
                 if (self.eval_video_path is not None):
                     if self.eval_video_ffmpeg_spcam:
                         self.eval_video_ffmpeg_spcam.stdin.write(img.tobytes())
