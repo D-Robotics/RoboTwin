@@ -1,20 +1,20 @@
 # RoboTwin pi0 Docker 构建指南
 
-提供两个 Dockerfile，差异在 torch 的 CUDA 变体：
+单一 `Dockerfile`，通过 `--build-arg` 切换 CUDA 变体：
 
-| Dockerfile | 镜像标签 | torch 来源 | 说明 |
-|------------|----------|------------|------|
-| `Dockerfile.cu124` | `robotwin-pi0:cu124` | uv.lock（PyPI，自带 cu124 nvidia 库） | 与宿主机编译的 curobo `.so` 直接匹配 |
-| `Dockerfile.cu128` | `robotwin-pi0:cu128` | 显式重装 `download.pytorch.org/whl/cu128` | 与基础镜像 CUDA 12.8.1 原生匹配 |
+| 构建命令 | 镜像标签 | torch 来源 | 说明 |
+|----------|----------|------------|------|
+| `docker build -t robotwin-pi0:cu124 .` | `robotwin-pi0:cu124` | uv.lock（PyPI，自带 cu124 nvidia 库） | 与宿主机编译的 curobo `.so` 直接匹配 |
+| `docker build --build-arg ... -t robotwin-pi0:cu128 .`（见下文） | `robotwin-pi0:cu128` | 显式重装 `download.pytorch.org/whl/cu128` | 与基础镜像 CUDA 12.8.1 原生匹配 |
 
-基础镜像：`Dockerfile.cu124` 用 `nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04`，`Dockerfile.cu128` 用 `nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04`。
+基础镜像：cu124 默认 `nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04`；cu128 用 `--build-arg BASE_IMAGE=nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04`。
 预期体积：约 30GB（不含 `assets`）。
 
 > **Python 版本警示**：venv 必须使用 uv 托管的 standalone CPython（≥3.11.13）。
 > Ubuntu 22.04 apt 仓库的 `python3.11` 是 **3.11.0rc1 预发布版**，其 PEP 659
 > 自适应特化有 bug（`_Py_Specialize_StoreAttr` 对 torch `ScriptFunction` 实例
 > 存 `__doc__` 时 `dk=NULL` 解引用），curobo 导入期 `torch.jit.script` 必段错误。
-> 因此 `Dockerfile.cu128` 以 `uv python install 3.11` 创建 venv（与宿主机一致）。
+> 因此 cu128 构建以 `uv python install 3.11` 创建 venv（与宿主机一致）。
 
 ## 适用环境
 
@@ -35,11 +35,18 @@
 cd /path/to/RoboTwin
 
 # clone lerobot + 检查 venv / curobo .so
-bash scripts/prepare-docker-build.sh
+bash script/prepare-docker-build.sh
 
 # 选其一构建：
-docker build -f Dockerfile.cu124 -t robotwin-pi0:cu124 .
-docker build -f Dockerfile.cu128 -t robotwin-pi0:cu128 .
+# cu124（默认 ARG）：
+docker build -t robotwin-pi0:cu124 .
+# cu128（覆盖 ARG）：
+docker build \
+  --build-arg BASE_IMAGE=nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04 \
+  --build-arg UV_VERSION=0.9.18 \
+  --build-arg CUDA_VARIANT=cu128 \
+  --build-arg EXTRA_LD_LIB_PATH=/usr/local/cuda/lib64: \
+  -t robotwin-pi0:cu128 .
 ```
 
 构建后验证（以 cu128 为例，cu124 同理替换标签）：
@@ -59,7 +66,7 @@ docker run --rm --gpus all robotwin-pi0:cu128 bash -lc '
 
 | 内容 | 是否提交 git | 来源 |
 |------|-------------|------|
-| `Dockerfile.cu124`、`Dockerfile.cu128`、`.dockerignore`、文档、脚本 | ✅ 提交 | 仓库 |
+| `Dockerfile`、`.dockerignore`、文档、脚本 | ✅ 提交 | 仓库 |
 | `policy/pi0/vendor/lerobot` | ❌ 不提交 | `prepare-docker-build.sh` build 前 clone |
 | `envs/curobo/`（含 `.so`） | ❌ 不提交 | 本地 curobo build |
 | `docker-vendor/` | ❌ 不提交 | 已废弃，无需维护 |
@@ -87,7 +94,7 @@ Docker build 时 `COPY envs/curobo` 会带上这些 `.so`，**无需** `docker-v
 ## lerobot（build 前自动 clone）
 
 ```bash
-bash scripts/prepare-docker-build.sh
+bash script/prepare-docker-build.sh
 # 或手动：
 git clone https://github.com/huggingface/lerobot policy/pi0/vendor/lerobot
 cd policy/pi0/vendor/lerobot && git checkout a445d9c9da6bea99a8972daa4fe1fdd053d711d2
@@ -123,11 +130,11 @@ docker save robotwin-pi0:cu124 -o robotwin-pi0-cu124.tar
 ## 常见问题
 
 **Q: 缺少 curobo .so 导致 build 失败？**  
-先在本机 `pip install -e .` 编译 curobo，再运行 `bash scripts/prepare-docker-build.sh`。
+先在本机 `pip install -e .` 编译 curobo，再运行 `bash script/prepare-docker-build.sh`。
 
 **Q: cu124 和 cu128 该选哪个？**  
 - 宿主机 curobo `.so` 是在 cu124 torch 下编译的 → 选 cu124（直接匹配，无需重装 torch）。
-- 想用与基础镜像 CUDA 12.8 原生匹配的 torch → 选 cu128（Dockerfile 会重装 torch）。
+- 想用与基础镜像 CUDA 12.8 原生匹配的 torch → 选 cu128（构建时重装 torch）。
 
 **Q: 还需要 docker-vendor 吗？**  
 不需要。旧方案已移除，可直接删除本地 `docker-vendor/` 目录。
