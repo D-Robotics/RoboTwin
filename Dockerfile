@@ -7,6 +7,9 @@ FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
 FROM ${BASE_IMAGE}
 
+ARG CUDA_VARIANT=cu124
+ARG EXTRA_LD_LIB_PATH=""
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -28,22 +31,22 @@ COPY policy/pi0/packages policy/pi0/packages
 COPY policy/pi0/src policy/pi0/src
 COPY policy/pi0/vendor/lerobot policy/pi0/vendor/lerobot
 
-RUN if [ "$CUDA_VARIANT" = "cu124" ]; then \
-        cd policy/pi0 && \
-        sed -i 's|lerobot = { git = "https://github.com/huggingface/lerobot", rev = "a445d9c9da6bea99a8972daa4fe1fdd053d711d2" }|lerobot = { path = "vendor/lerobot" }|' pyproject.toml && \
+RUN cd policy/pi0 && \
+    sed -i 's|lerobot = { git = "https://github.com/huggingface/lerobot", rev = "a445d9c9da6bea99a8972daa4fe1fdd053d711d2" }|lerobot = { path = "vendor/lerobot" }|' pyproject.toml && \
+    sed -i 's|source = { git = "https://github.com/huggingface/lerobot?rev=a445d9c9da6bea99a8972daa4fe1fdd053d711d2#a445d9c9da6bea99a8972daa4fe1fdd053d711d2" }|source = { editable = "vendor/lerobot" }|' uv.lock && \
+    if [ "$CUDA_VARIANT" = "cu124" ]; then \
         GIT_LFS_SKIP_SMUDGE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never uv sync --frozen --python python3.11 && \
         cp -r src/openpi/models_pytorch/transformers_replace/* .venv/lib/python3.11/site-packages/transformers/; \
     else \
         uv python install 3.11 && \
-        cd policy/pi0 && \
-        sed -i 's|lerobot = { git = "https://github.com/huggingface/lerobot", rev = "a445d9c9da6bea99a8972daa4fe1fdd053d711d2" }|lerobot = { path = "vendor/lerobot" }|' pyproject.toml && \
         GIT_LFS_SKIP_SMUDGE=1 UV_LINK_MODE=copy uv sync --frozen --python 3.11 --no-install-package torch --no-install-package torchvision && \
         . .venv/bin/activate && \
         python -VV && \
         python -c "import sys; assert sys.version_info >= (3, 11, 13), 'must use >=3.11.13: ' + sys.version" && \
         pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128 && \
         cp -r src/openpi/models_pytorch/transformers_replace/* .venv/lib/python3.11/site-packages/transformers/; \
-    fi
+    fi && \
+    rm -rf /root/.cache/uv /root/.cache/pip
 
 COPY envs/curobo envs/curobo
 RUN test -n "$(ls envs/curobo/src/curobo/curobolib/*.so 2>/dev/null)" || \

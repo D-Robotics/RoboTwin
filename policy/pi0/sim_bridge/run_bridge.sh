@@ -20,12 +20,6 @@ export TORCHDYNAMO_DISABLE="${TORCHDYNAMO_DISABLE:-1}"
 # point outside the repo (causing "No module named 'eval_policy'" on reset).
 ROBOTWIN_ROOT="$(cd "${ROBOTWIN_ROOT:-$SCRIPT_DIR/../../..}" && pwd)"
 
-# Ensure protobuf runtime is available.
-if ! python3 -c "import google.protobuf" >/dev/null 2>&1; then
-  echo "[bridge] installing protobuf runtime..." >&2
-  pip install -q protobuf
-fi
-
 # RoboTwin env code reads ./assets relative to the repo root, so always run
 # with cwd == ROBOTWIN_ROOT. Prefer the project venv next to this script
 # (e.g. policy/pi0/.venv), then ROBOTWIN_ROOT/.venv.
@@ -39,6 +33,12 @@ if [ "$1" != "--stub" ]; then
       break
     fi
   done
+fi
+
+# Ensure protobuf runtime is available.
+if ! python3 -c "import google.protobuf" >/dev/null 2>&1; then
+  echo "[bridge] installing protobuf runtime..." >&2
+  pip install -q protobuf
 fi
 
 cd "$ROBOTWIN_ROOT"
