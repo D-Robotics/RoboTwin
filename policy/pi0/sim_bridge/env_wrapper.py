@@ -66,12 +66,14 @@ def _resolve_robotwin_root(robotwin_root):
 
 # Web-exposed runtime config: line-patch config.yaml so the Chinese comments
 # and unrelated keys survive (a full yaml round-trip would destroy them).
-_RUNTIME_CONFIG_KEYS = ("test_num", "sample", "rnd")
-_RUNTIME_CONFIG_DEFAULTS = {"test_num": 100, "sample": 0, "rnd": False}
+_RUNTIME_CONFIG_KEYS = ("test_num", "sample", "rnd", "save_sample")
+_RUNTIME_CONFIG_DEFAULTS = {"test_num": 100, "sample": 0, "rnd": False,
+                            "save_sample": False}
 _RUNTIME_CONFIG_FORMAT = {
     "test_num": lambda v: str(int(v)),
     "sample": lambda v: str(int(v)),
     "rnd": lambda v: "true" if v else "false",
+    "save_sample": lambda v: "true" if v else "false",
 }
 
 
@@ -85,13 +87,15 @@ def _validate_runtime_config(cfg):
         lo, hi = (1, 10000) if key == "test_num" else (0, 10 ** 9)
         if not (lo <= v <= hi):
             raise ValueError(f"{key} out of range [{lo}, {hi}]")
-    if not isinstance(cfg.get("rnd"), bool):
-        raise ValueError("rnd must be a boolean")
+    for key in ("rnd", "save_sample"):
+        if not isinstance(cfg.get(key), bool):
+            raise ValueError(f"{key} must be a boolean")
 
 
 def read_runtime_config(path):
-    """Return {test_num, sample, rnd} from a config.yaml, falling back to
-    defaults when the file is missing or unreadable. Never raises."""
+    """Return {test_num, sample, rnd, save_sample} from a config.yaml,
+    falling back to defaults when the file is missing or unreadable.
+    Never raises."""
     import yaml
     cfg = dict(_RUNTIME_CONFIG_DEFAULTS)
     try:
@@ -106,7 +110,8 @@ def read_runtime_config(path):
 
 
 def write_runtime_config(path, cfg):
-    """Validate and persist {test_num, sample, rnd} into a config.yaml.
+    """Validate and persist {test_num, sample, rnd, save_sample} into a
+    config.yaml.
 
     Line-patches only the target key lines, preserving every other line
     (comments, unrelated keys). Missing keys are appended at the end.
@@ -149,7 +154,8 @@ class StubSimEnv:
         self._suc = 0
         self._total = 0
         self._reset_pending = True
-        self._runtime_cfg = {"test_num": 0, "sample": 0, "rnd": False}
+        self._runtime_cfg = {"test_num": 0, "sample": 0, "rnd": False,
+                            "save_sample": False}
 
     @property
     def take_action_cnt(self):
