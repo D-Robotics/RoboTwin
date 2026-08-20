@@ -36,6 +36,7 @@ from tqdm import tqdm
 from openpi.models import model as _model
 from openpi.models_pytorch.pi0_pytorch import PI0Pytorch
 from openpi.policies import policy_config as _policy_config
+from openpi.policies.policy import LOCAL
 from openpi.training import config as _config
 
 IMAGE_KEYS = ("cam_high", "cam_left_wrist", "cam_right_wrist")
@@ -133,8 +134,8 @@ def list_episode_dirs(frames_root: pathlib.Path) -> list[pathlib.Path]:
 def make_runtime_cfg(infer_cfg: dict[str, Any]) -> dict[str, Any]:
     """Build a policy.py-compatible cfg dict with non-torch paths disabled."""
     return {
-        "stage": 1,  # SKIP: no socket / remote inference
-        "use_cpp": False,
+        "stage": LOCAL,  # no socket / remote inference
+        "remote": False,
         "do_preproc": bool(infer_cfg.get("preproc", False)),
         "do_postproc": bool(infer_cfg.get("postproc", False)),
         "filter": 0,
@@ -278,7 +279,18 @@ def run_episode(
         actions = inferencer.infer(obs)
         env_actions = actions[: inferencer.pi0_step]
         save_actions(episode_output, frame_dir.name, actions, env_actions)
-        tqdm.write(f"{episode_name}/{frame_dir.name}: saved actions {actions.shape}")
+
+        saved_action_path = frame_dir / "action.npy"
+        action_diff = None
+        if saved_action_path.exists():
+            saved = np.load(saved_action_path).astype(np.float64)
+            if saved.shape == actions.shape:
+                action_diff = float(np.max(np.abs(saved - actions.astype(np.float64))))
+
+        diff_text = "n/a" if action_diff is None else f"{action_diff:.6f}"
+        tqdm.write(
+            f"{episode_name}/{frame_dir.name}: saved actions {actions.shape} | max|online-offline| = {diff_text}"
+        )
         results.append(
             {
                 "episode": episode_name,
@@ -286,6 +298,7 @@ def run_episode(
                 "actions_shape": list(actions.shape),
                 "env_actions_shape": list(env_actions.shape),
                 "first_env_action": env_actions[0].tolist(),
+                "online_offline_max_abs_diff": action_diff,
             }
         )
     return results

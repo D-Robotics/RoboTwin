@@ -12,7 +12,6 @@ import select
 import socket
 import time
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 import torch
@@ -139,7 +138,6 @@ class RemoteModel:
         visp: bool,
         chunk: int,
         debug: bool,
-        is_pytorch_model: bool,
     ) -> None:
         self.port = port
         self.do_preproc = do_preproc
@@ -147,7 +145,6 @@ class RemoteModel:
         self.visp = visp
         self.chunk = chunk
         self.debug = debug
-        self._is_pytorch_model = is_pytorch_model
 
         self.listen_fd: socket.socket | None = None
         self.sock_fd: socket.socket | None = None
@@ -477,12 +474,7 @@ class RemoteModel:
             action_in = np.array(recv_data["prompt"], dtype=np.float16)
         else:
             action_in = np.array(recv_data["prompt"], dtype=np.float64)
-        if self._is_pytorch_model:
-            action_jax = torch.tensor(action_in)
-        else:
-            action_jax = jax.tree.map(lambda x: jnp.array(x), action_in)
-        action_jax = action_jax.squeeze()[: self.chunk].cpu()
-        return action_jax
+        return action_in.squeeze()[: self.chunk]
 
     def __call__(
         self,

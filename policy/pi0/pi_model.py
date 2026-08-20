@@ -36,17 +36,11 @@ class PI0:
             cfg['torch_model'],
             robotwin_repo_id=model_name,
             cfg = cfg)
-        if cfg.get("use_cpp") and cfg.get("stage") == 2:
-            pass
-        else:
+        if not self.policy.remote_only:
             print("Load model success.")
         self.img_size = (224, 224)
         self.observation_window = None
         self.pi0_step = pi0_step
-
-    def connect_remote(self) -> None:
-        if hasattr(self.policy, "connect"):
-            self.policy.connect()
 
     # set img_size
     def set_img_size(self, img_size):

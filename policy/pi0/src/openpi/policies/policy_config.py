@@ -13,7 +13,6 @@ from openpi.training import checkpoints as _checkpoints
 from openpi.training import config as _config
 import openpi.transforms as transforms
 
-OBS, SKIP, FULL = range(3)
 
 def create_trained_policy(
     train_config: _config.TrainConfig,
@@ -53,16 +52,22 @@ def create_trained_policy(
     weight_path = os.path.join(checkpoint_dir, "model.safetensors")
     is_pytorch = os.path.exists(weight_path)
 
-    # read config
-    data = cfg
+    # read config (defaults first, so callers like serve_policy.py may omit cfg entirely)
+    data = _policy.DEFAULT_RUNTIME_CFG | (cfg or {})
     stage = data['stage']
-    use_cpp = data['use_cpp'] and stage == FULL
+    # LOCAL/OBS stages always require a local model; only NETWORK may skip loading it.
+    local_model = data.get('local_model', True)
+    if stage != _policy.NETWORK:
+        local_model = True
+    data['local_model'] = local_model
     do_preproc = data['do_preproc']
     do_postproc = data['do_postproc']
-    need_norm = stage != FULL or do_preproc or do_postproc
-    
-    if use_cpp:
-        print("Remote inference enabled (local Torch model skipped).")
+    # norm_stats is needed whenever the local pipeline runs Normalize/Unnormalize
+    # (local model loaded) or the remote pre/post-processing relies on them.
+    need_norm = local_model or do_preproc or do_postproc
+
+    if not local_model:
+        print("Remote inference enabled (local model skipped, local_model=false).")
         model = None
     elif is_pytorch:
         print(f"Loading model from {weight_path}...")

@@ -62,11 +62,6 @@ def _print_eval_section(
     print()
 
 
-def _connect_remote_if_needed(model, cfg: dict) -> None:
-    if cfg.get("use_cpp") and cfg.get("stage") == 2 and hasattr(model, "connect_remote"):
-        model.connect_remote()
-
-
 def class_decorator(task_name):
     envs_module = importlib.import_module(f"envs.{task_name}")
     try:
@@ -476,8 +471,10 @@ def eval_policy(
         )
         if RND:
             instruction = np.random.choice(results[0][instruction_type])
-            with open(f"./eval_data/{task_name}/{SAMPLE}/{now_id}_inst.pkl", "wb") as f:
-                pickle.dump(instruction, f)
+            if data.get("save_sample", False):
+                os.makedirs(f"./eval_data/{task_name}/{SAMPLE}", exist_ok=True)
+                with open(f"./eval_data/{task_name}/{SAMPLE}/{now_id}_inst.pkl", "wb") as f:
+                    pickle.dump(instruction, f)
         else:
             with open(f"./eval_data/{task_name}/{SAMPLE}/{now_id}_inst.pkl", "rb") as f:
                 instruction = pickle.load(f)
