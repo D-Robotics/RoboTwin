@@ -1504,6 +1504,24 @@ class Base_Task(gym.Env):
                 axis=1))
         return self.now_obs["observation"]["head_camera"]["rgb"]
 
+    def _live_step_handled(self) -> bool:
+        """True when the step counter is already shown on a live status line.
+
+        openpi eval runs render steps via the eval_live singleton; when
+        another renderer owns the line (sim_bridge's per-connection
+        EvalLiveProgress), stay silent instead of clobbering it with the
+        fallback ``step: N / M`` print in take_action.
+        """
+        try:
+            from openpi.policies.eval_progress import EvalLiveProgress, eval_live
+        except ImportError:
+            return False
+        if self.eval_video_path is not None and eval_live.update_step(
+            self.take_action_cnt, self.step_lim
+        ):
+            return True
+        return EvalLiveProgress.line_claimed()
+
     def take_action(self, action, action_type:Literal['qpos', 'ee']='qpos'):  # action_type: qpos or ee
         if self.take_action_cnt == self.step_lim or self.eval_success:
             return
@@ -1516,15 +1534,7 @@ class Base_Task(gym.Env):
                 elif self.eval_video_ffmpeg:
                     self.eval_video_ffmpeg.stdin.write(img.tobytes())
         self.take_action_cnt += 1
-        handled = False
-        if self.eval_video_path is not None:
-            try:
-                from openpi.policies.eval_progress import eval_live
-
-                handled = eval_live.update_step(self.take_action_cnt, self.step_lim)
-            except ImportError:
-                handled = False
-        if not handled:
+        if not self._live_step_handled():
             print(
                 f"\r\033[Kstep: \033[92m{self.take_action_cnt} / {self.step_lim}\033[0m",
                 end="",
