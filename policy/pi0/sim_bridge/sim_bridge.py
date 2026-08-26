@@ -39,6 +39,7 @@ sys.path.insert(0, _HERE)  # for env_wrapper
 sys.path.insert(0, os.path.join(_HERE, "..", "src"))  # for openpi.patch
 from openpi.patch import msg_pb2  # noqa: E402
 from openpi.patch.wire import send_msg as _send_msg, recv_msg as _recv_msg  # noqa: E402
+from openpi.policies.eval_progress import EvalLiveProgress  # noqa: E402
 from env_wrapper import SimEnv, StubSimEnv  # noqa: E402
 
 
@@ -156,6 +157,8 @@ class DataHandler(socketserver.BaseRequestHandler):
             b.client_addr = f"{self.client_address[0]}:{self.client_address[1]}"
         print(f"[bridge] board connected from {b.client_addr}", flush=True)
         seq = 0
+        progress = EvalLiveProgress()
+        progress.enabled = True
         try:
             while not b.stop_flag:
                 if not b.running:
@@ -189,6 +192,7 @@ class DataHandler(socketserver.BaseRequestHandler):
                                 b.pending_reset = False
                                 b.step = 0
                                 performed_reset = True
+                                progress.reset_episode()
                             except Exception as e:
                                 # Exit immediately instead of retry-looping
                                 # the same failed reset forever. The common
@@ -213,20 +217,30 @@ class DataHandler(socketserver.BaseRequestHandler):
                     with b.env_lock:
                         rgb, state, instr = self.env.get_obs()
                 except Exception as e:
+                    progress.flush()
                     print(f"[bridge] get_obs failed: {e}", flush=True)
                     time.sleep(0.2)
                     continue
                 seq += 1
                 obs_msg = build_obs(rgb, state, instr, reset, seq)
+                progress.begin_infer_cycle(
+                    seq - 1, b.step, getattr(self.env, "step_lim", 0))
+                progress.begin_send()
                 try:
-                    _send_msg(self.request, obs_msg)
+                    send_bytes = _send_msg(self.request, obs_msg)
+                    progress.complete_send(True, send_bytes)
                 except Exception:
+                    progress.complete_send(False, 0)
                     break
                 t0 = time.time()
-                act_msg = _recv_msg(self.request)
+                progress.begin_recv()
+                act_msg, recv_bytes = _recv_msg(self.request)
                 if act_msg is None:
+                    progress.complete_recv(False, recv_bytes)
+                    progress.flush()
                     print("[bridge] board closed data socket", flush=True)
                     break
+                progress.complete_recv(True, recv_bytes)
                 actions = parse_action(act_msg)
                 if actions is not None and actions.size:
                     # actions shape [N, chunk, dim]; take first batch's chunks.
@@ -246,10 +260,13 @@ class DataHandler(socketserver.BaseRequestHandler):
                             with b.env_lock:
                                 self.env.take_action(a)
                         except Exception as e:
+                            progress.flush()
                             print(f"[bridge] take_action failed: {e}",
                                   flush=True)
                             break
                         b.step += 1
+                        progress.update_step(
+                            b.step, getattr(self.env, "step_lim", 0))
                         # Send a view-only frame so the browser sees every
                         # sim step, not just one per inference chunk. Skip
                         # when paused (b.running=False) so the board's TCP
@@ -274,6 +291,7 @@ class DataHandler(socketserver.BaseRequestHandler):
                                 >= self.env.step_lim):
                             break
                     if self.env.eval_success():
+                        progress.flush()
                         b.success += 1
                         b.total += 1
                         b.last_result = "success"
@@ -286,6 +304,7 @@ class DataHandler(socketserver.BaseRequestHandler):
                           and self.env.step_lim
                           and self.env.take_action_cnt
                           >= self.env.step_lim):
+                        progress.flush()
                         b.total += 1
                         b.last_result = "fail"
                         b.last_steps = b.step
@@ -311,6 +330,7 @@ class DataHandler(socketserver.BaseRequestHandler):
                     b.data_srv.shutdown()
                 except Exception:
                     pass
+            progress.flush()
             print("[bridge] board data handler exit", flush=True)
 
 

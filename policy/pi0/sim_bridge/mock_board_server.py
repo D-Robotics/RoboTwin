@@ -177,7 +177,7 @@ def _worker_loop(pi0_step, state_dim):
             time.sleep(0.1)
             continue
         try:
-            obs = _recv_msg(st.sim_sock)
+            obs, _recv_size = _recv_msg(st.sim_sock)
         except Exception:
             st.connected = False
             st.broadcast({"type": "event", "event": "disconnected", "msg": "data socket closed"})

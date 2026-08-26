@@ -5,8 +5,9 @@ to RemoteModel and, in network mode, swaps the local ``action = model(obs)``
 site for ``action = remote_model(obs)`` via ``RemoteModel.__call__``.
 
 Wire format mirrors openpi/patch/wire.py: 4-byte big-endian length prefix +
-serialized msg_pb2.MultiModalInput body. Verbose IO logging lives here so the
-Policy body stays focused on the local model pipeline.
+serialized msg_pb2.MultiModalInput body. IO logging uses a single overwriting
+line (carriage-return + clear-line) so the screen never floods — one
+send/recv status line persists per episode, updating in place.
 """
 import select
 import socket
@@ -51,41 +52,31 @@ def _flush_progress_line() -> None:
     print("\r\033[K", end="", flush=True)
 
 
-def _format_header_inline(header, *, show_reset: bool = True) -> str:
-    parts = [f"Seq: {header.seq}"]
-    if show_reset:
-        reset_str = str(header.reset).lower()
-        if header.reset:
-            parts.append(f"{_YELLOW}Reset: true{_RESET}")
-        else:
-            parts.append(f"Reset: {reset_str}")
-    return " | ".join(parts)
+def _format_body_summary(batch) -> str:
+    """Compact one-line summary of the message body."""
+    parts: list[str] = []
+    if batch.images:
+        img = batch.images[0]
+        parts.append(
+            f"img:{len(batch.images)}({_dtype_name(img.dtype)},{_shape_str(img.shape)})"
+        )
+    if batch.languages:
+        lang = batch.languages[0]
+        parts.append(
+            f"lang:{len(batch.languages)}({_dtype_name(lang.dtype)},{_shape_str(lang.shape)})"
+        )
+    if batch.states:
+        state = batch.states[0]
+        parts.append(
+            f"state:{len(batch.states)}({_dtype_name(state.dtype)},{_shape_str(state.shape)})"
+        )
+    return " ".join(parts) if parts else ""
 
 
 def _status_text(ok: bool) -> str:
     if ok:
         return f"{_GREEN}OK{_RESET}"
-    return f"{_RED}FAILED{_RESET}"
-
-
-def _format_body_lines(batch) -> list[str]:
-    lines: list[str] = []
-    if batch.images:
-        img = batch.images[0]
-        lines.append(
-            f"Images: {len(batch.images)} ({_dtype_name(img.dtype)}, {_shape_str(img.shape)})"
-        )
-    if batch.languages:
-        lang = batch.languages[0]
-        lines.append(
-            f"Languages: {len(batch.languages)} ({_dtype_name(lang.dtype)}, {_shape_str(lang.shape)})"
-        )
-    if batch.states:
-        state = batch.states[0]
-        lines.append(
-            f"States: {len(batch.states)} ({_dtype_name(state.dtype)}, {_shape_str(state.shape)})"
-        )
-    return lines
+    return f"{_RED}FAIL{_RESET}"
 
 
 def _io_tag_label(tag: str) -> str:
@@ -100,25 +91,32 @@ def _io_tag_label(tag: str) -> str:
     return f"[{tag}]"
 
 
-def _print_io_verbose(
+def _print_io_compact(
     tag: str,
     ok: bool,
     payload_bytes: int,
     header=None,
     batch=None,
 ) -> None:
+    """Print a single SEND/RECEIVE status line that overwrites the previous line.
+
+    Uses ``\\r\\033[K`` (carriage-return + clear-line) so each call replaces
+    whatever was on the current line — no scrolling, no flooding.
+    """
     _flush_progress_line()
     status = _status_text(ok)
-    payload = f"{_GRAY}({payload_bytes} bytes){_RESET}"
-    print(f"  {_io_tag_label(tag)} Status: {status} {payload}")
+    parts: list[str] = [_io_tag_label(tag), status]
+    if payload_bytes:
+        parts.append(f"{_GRAY}{payload_bytes}B{_RESET}")
     if header is not None:
-        print(f"    Header ➔ {_format_header_inline(header, show_reset=(tag == 'SEND'))}")
+        parts.append(f"Seq:{header.seq}")
+        if tag == "SEND" and header.reset:
+            parts.append(f"{_YELLOW}reset{_RESET}")
     if batch is not None:
-        body_lines = _format_body_lines(batch)
-        for idx, line in enumerate(body_lines):
-            prefix = "    Body   ➔ " if idx == 0 else "           ➔ "
-            print(f"{prefix}{line}")
-    print()
+        summary = _format_body_summary(batch)
+        if summary:
+            parts.append(summary)
+    print("  " + " | ".join(parts), end="", flush=True)
 
 
 class RemoteModel:
@@ -327,16 +325,16 @@ class RemoteModel:
                 sock.sendall(net_len_bytes)  # 发送 4 字节长度
                 sock.sendall(serialized_data)  # 发送 Protobuf 数据
                 if verbose:
-                    _print_io_verbose("SEND", True, data_len, msg.header, msg)
+                    _print_io_compact("SEND", True, data_len, msg.header, msg)
                 elif live_io is not None:
-                    live_io.complete_send(True)
+                    live_io.complete_send(True, data_len)
                 return True
             except Exception as e:
                 print(f"发送失败：{str(e)}")
                 if verbose:
-                    _print_io_verbose("SEND", False, 0)
+                    _print_io_compact("SEND", False, 0)
                 elif live_io is not None:
-                    live_io.complete_send(False)
+                    live_io.complete_send(False, 0)
                 return False
 
         return send_proto_message(sock, input_msg, verbose)
@@ -350,9 +348,9 @@ class RemoteModel:
                 if len(net_len_data) != 4:
                     print("未收到完整长度（需4字节，实际收到{}字节）".format(len(net_len_data)))
                     if verbose:
-                        _print_io_verbose("RECEIVE", False, len(net_len_data))
+                        _print_io_compact("RECEIVE", False, len(net_len_data))
                     elif live_io is not None:
-                        live_io.complete_recv(False)
+                        live_io.complete_recv(False, 0)
                     return False
 
                 # 大端解析 4 字节长度，与 wire.py 一致
@@ -365,25 +363,25 @@ class RemoteModel:
                     if not chunk:
                         print("连接断开")
                         if verbose:
-                            _print_io_verbose("RECEIVE", False, len(serialized_data))
+                            _print_io_compact("RECEIVE", False, len(serialized_data))
                         elif live_io is not None:
-                            live_io.complete_recv(False)
+                            live_io.complete_recv(False, 0)
                         return False
                     serialized_data += chunk
 
                 # 反序列化
                 msg.ParseFromString(serialized_data)
                 if verbose:
-                    _print_io_verbose("RECEIVE", True, data_len, msg.header, msg)
+                    _print_io_compact("RECEIVE", True, data_len, msg.header, msg)
                 elif live_io is not None:
-                    live_io.complete_recv(True)
+                    live_io.complete_recv(True, data_len)
                 return True
             except Exception as e:
                 print(f"接收失败：{str(e)}")
                 if verbose:
-                    _print_io_verbose("RECEIVE", False, 0)
+                    _print_io_compact("RECEIVE", False, 0)
                 elif live_io is not None:
-                    live_io.complete_recv(False)
+                    live_io.complete_recv(False, 0)
                 return False
 
         while True:
@@ -488,16 +486,17 @@ class RemoteModel:
 
         Sends ``observation``, waits for the reply, and returns the processed
         action — replacing ``action = model(obs)`` at the Policy's call site.
-        Mirrors the verbose/live_io hook ordering Policy.infer used inline.
+
+        When ``live_io`` is provided, send/recv status is rendered as a single
+        overwriting line via ``EvalLiveProgress`` (no screen flooding). When
+        ``live_io`` is None (e.g. OBS test mode), a compact single-line
+        overwrite is printed directly.
         """
-        if verbose:
-            self.send(observation, reset=reset, verbose=True)
-            recv_data = self.receive(observation, reset=reset, verbose=True)
-        else:
-            if live_io is not None:
-                live_io.begin_send()
-            self.send(observation, reset=reset, verbose=False, live_io=live_io)
-            if live_io is not None:
-                live_io.begin_recv()
-            recv_data = self.receive(observation, reset=reset, verbose=False, live_io=live_io)
+        use_verbose = verbose and live_io is None
+        if live_io is not None:
+            live_io.begin_send()
+        self.send(observation, reset=reset, verbose=use_verbose, live_io=live_io)
+        if live_io is not None:
+            live_io.begin_recv()
+        recv_data = self.receive(observation, reset=reset, verbose=use_verbose, live_io=live_io)
         return self.proc_action(recv_data)

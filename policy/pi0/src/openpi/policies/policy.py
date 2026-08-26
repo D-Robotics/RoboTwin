@@ -335,13 +335,8 @@ class Policy(BasePolicy):
         # Network Mode: exchange obs/action with the remote engine.
         if self.stage == NETWORK:
             cycle = self._io_log_cycles
-            verbose_io = self.debug or cycle == 0
-            if verbose_io:
-                action_recv = self.remote(sent_obs, reset=reset, verbose=True)
-                eval_live.complete_cycle_verbose(cycle, env_step, env_step_lim)
-            else:
-                eval_live.begin_infer_cycle(cycle, env_step, env_step_lim)
-                action_recv = self.remote(sent_obs, reset=reset, verbose=False, live_io=eval_live)
+            eval_live.begin_infer_cycle(cycle, env_step, env_step_lim)
+            action_recv = self.remote(sent_obs, reset=reset, live_io=eval_live)
             self._io_log_cycles += 1
 
             remote_outputs = {"actions": action_recv, "state": preproc_inputs["state"]}
