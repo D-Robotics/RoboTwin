@@ -134,7 +134,8 @@ def _make_ffmpeg(video_size, out_path, scale_hd=1):
 
 
 def main(usr_args):
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    current_time = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
+    current_time = usr_args.get("eval_name", current_time)
     task_name = usr_args["task_name"]
     task_config = usr_args["task_config"]
     ckpt_setting = usr_args["ckpt_setting"]

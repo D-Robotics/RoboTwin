@@ -9,6 +9,7 @@ train_config_name=${3}
 model_name=${4}
 seed=${5}
 gpu_id=${6}
+eval_name=${7:-""}
 
 # add
 #export XLA_FLAGS="--xla_gpu_autotune_level=0"
@@ -29,4 +30,5 @@ python script/eval_policy.py --config policy/$policy_name/deploy_policy.yml \
     --model_name ${model_name} \
     --ckpt_setting ${model_name} \
     --seed ${seed} \
-    --policy_name ${policy_name} 
+    --policy_name ${policy_name} \
+    --eval_name "${eval_name}"
