@@ -135,7 +135,9 @@ def _make_ffmpeg(video_size, out_path, scale_hd=1):
 
 def main(usr_args):
     current_time = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
-    current_time = usr_args.get("eval_name", current_time)
+    # empty eval_name (eval.sh omits the 7th arg) falls back to date_time,
+    # otherwise replays land flat in the ckpt_setting directory
+    current_time = usr_args.get("eval_name") or current_time
     task_name = usr_args["task_name"]
     task_config = usr_args["task_config"]
     ckpt_setting = usr_args["ckpt_setting"]
@@ -387,6 +389,8 @@ def eval_policy(
         eval_result_name=eval_result_name,
         history_path=history_path,
     )
+    if eval_result_dir:
+        print(f"Replays will be saved in \033[35m{eval_result_dir}\033[0m")
     print("Engine Starting...")
 
     # Ensure config.yaml exists in eval directory

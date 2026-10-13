@@ -1,6 +1,6 @@
 #!/bin/bash
 
-export XLA_PYTHON_CLIENT_MEM_FRACTION=0.4 # ensure GPU < 24G
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.25 # ensure GPU < 24G
 
 policy_name=pi0
 task_name=${1}
@@ -13,7 +13,7 @@ eval_name=${7:-""}
 
 # add
 #export XLA_FLAGS="--xla_gpu_autotune_level=0"
-#export XLA_PYTHON_CLIENT_MEM_FRACTION=0.4 # ensure GPU < 24G
+#export XLA_PYTHON_CLIENT_MEM_FRACTION=0.25 # ensure GPU < 24G
 
 export CUDA_VISIBLE_DEVICES=${gpu_id}
 echo -e "\033[33mgpu id (to use): ${gpu_id}\033[0m"

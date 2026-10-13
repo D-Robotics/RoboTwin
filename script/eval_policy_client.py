@@ -227,7 +227,9 @@ class ModelClient:
 
 def main(usr_args):
     current_time = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
-    current_time = usr_args.get("eval_name", current_time)
+    # empty eval_name (eval.sh omits the 7th arg) falls back to date_time,
+    # otherwise replays land flat in the ckpt_setting directory
+    current_time = usr_args.get("eval_name") or current_time
     task_name = usr_args["task_name"]
     task_config = usr_args["task_config"]
     ckpt_setting = usr_args["ckpt_setting"]
@@ -367,6 +369,8 @@ def eval_policy(task_name,
                 policy_conda_env=None):
     print(f"\033[34mTask Name: {args['task_name']}\033[0m")
     print(f"\033[34mPolicy Name: {args['policy_name']}\033[0m")
+    if args.get("eval_video_save_dir"):
+        print(f"Replays will be saved in \033[35m{args['eval_video_save_dir']}\033[0m")
 
     expert_check = True
     TASK_ENV.suc = 0
